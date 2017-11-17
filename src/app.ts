@@ -1,8 +1,9 @@
 import { Bot, MemoryStorage, BotStateManager } from 'botbuilder-core';
 import { BotFrameworkAdapter } from 'botbuilder-services';
 import { createServer } from 'restify';
-import { Router, tryInOrder, tryInScoreOrder, ifMatches, ifTrue, ifMessage, ifText, ifRegExp } from 'prague-botbuilder';
+import { Router, tryInOrder, tryInScoreOrder, ifMatches, ifTrue, ifMessage, ifText, ifRegExp, ifNumber } from 'prague-botbuilder';
 import { tryActiveRouter, ActiveRouter, NamedRouter } from './ActiveRouter';
+import 'isomorphic-fetch';
 
 // Create server
 let server = createServer();
@@ -18,41 +19,78 @@ const adapter = new BotFrameworkAdapter({
 
 server.post('/api/messages', adapter.listen() as any);
 
-const askName = new NamedRouter('askName', args => ifText()
-    .thenDo((c, text) => {
-        c.reply(`Nice to meet you, ${text}.`);
-    })
-    .elseDo((c, reason) => {
-        c.makeThisRouterActive(args);
+interface Profile {
+    name: string;
+    age: number;
+}
+
+const interviewMe = (c: BotContext, profile = {} as Partial<Profile>) => {
+    if (profile.name === undefined) {
+        c.reply("What's your name?");
+        return c.setActiveRouter(askForName, profile);
+    }
+
+    if (profile.age === undefined) {
+        c.reply("How old are you?");        
+        return c.setActiveRouter(askForAge, profile);
+    }
+
+    c.reply(`Great, your name is ${profile.name} and you are ${profile.age} years old.`)
+}
+
+const askForName = new NamedRouter<Profile>('askForName', profile => ifText()
+    .thenDo((c, name) => interviewMe(c, {
+        ... profile,
+        name
+    }))
+    .elseDo(c => {
+        c.reply("I'd really like to know your name.");
+        c.setActiveRouter(askForName, profile);
     })
 );
+
+const askForAge = new NamedRouter<Profile>('askForAge', profile => ifNumber()
+    .thenDo((c, age) => interviewMe(c, {
+        ... profile,
+        age
+    }))
+    .elseDo((c, reason) => {
+        c.reply("I'd really like to know your age.");
+        c.setActiveRouter(askForAge, profile);
+    })
+);
+
+interface JsonResponse {
+    userId: string;
+    id: string;
+    title: string;
+    body: string;
+}
+
+const getTitle = (id: string) => fetch(`https://jsonplaceholder.typicode.com/posts/${id}`)
+    .then(response => response.json())
+    .then((response: JsonResponse) => response.title);
 
 const router =
     ifMessage()
         .thenTry(
             tryInOrder(
                 tryActiveRouter(),
-                ifRegExp(/howdy|hi|hello/i).thenDo(c =>c.reply(`Hello to you!`)),
-                ifRegExp(/what time is it/i).thenDo(c => c.reply(`It's showtime.`)),
-                ifRegExp(/my name is (.*)/i).thenDo((c, matches) => c.reply(`Nice to meet you, ${matches[1]}`)),
-                ifRegExp(/match (.*)/i)
-                    .thenTry(matches =>
-                        tryInScoreOrder(
-                            ifTrue(c => /bi/i.test(matches[1]) && { value: true, score: 0.5 })
-                                .thenDo(c => c.reply(`I matched "bi"`)),
-                            ifTrue(c => /bill/i.test(matches[1]) && { value: true, score: .75 })
-                                .thenDo(c => c.reply(`I matched "bill"`))
-                        )
-                    ),
+                ifRegExp(/My name is (.+)/i)
+                    .thenDo((c, matches) => c.reply(`Nice to meet you, ${matches[1]}!!`)),
+                ifRegExp(/howdy|hi|hello|yo|hey|wassup/i)
+                    .thenDo(c => c.reply("Hello to you")),
+                ifRegExp(/title for (\d+)/i).thenTry(matches =>
+                    ifMatches(c => getTitle(matches[1]))
+                        .thenDo((c, response) => c.reply(`The title was "${response}"`))
+                        .elseDo(c => c.reply(`There is no title for ${matches[1]}.`))
+                ),
                 ifRegExp(/interview me/i)
-                    .thenDo(c => {
-                        c.reply("What's your name?");
-                        c.setActiveRouter(askName);
-                    })
+                    .thenDo(c => interviewMe(c)),
             )
-            .defaultDo(c => c.reply("I will never understand you humans"))
+            .defaultDo(c => c.reply("I just don't understand you humans.")), 
         )
-        .elseDo(c => c.reply("non-message activity"))
+        .elseDo(c => c.reply("Non-message activity"));
 
 const bot = new Bot(adapter)
     .use(new MemoryStorage())
