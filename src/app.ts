@@ -71,10 +71,10 @@ const getTitle = (id: string) => fetch(`https://jsonplaceholder.typicode.com/pos
     .then(response => response.json())
     .then((response: JsonResponse) => response.title);
 
-const router =
-    ifMessage()
-        .thenTry(
-            tryInOrder(
+const botLogic = (c: BotContext) => {
+    switch(c.request.type) {
+        case 'message':
+            return tryInOrder(
                 tryActiveRouter(),
                 ifRegExp(/My name is (.+)/i)
                     .thenDo((c, matches) => c.reply(`Nice to meet you, ${matches[1]}!!`)),
@@ -88,12 +88,15 @@ const router =
                 ifRegExp(/interview me/i)
                     .thenDo(c => interviewMe(c)),
             )
-            .defaultDo(c => c.reply("I just don't understand you humans.")), 
-        )
-        .elseDo(c => c.reply("Non-message activity"));
-
+            .defaultDo(c => c.reply("I just don't understand you humans."))
+            .route(c); 
+        default:
+            c.reply("Non-message activity");
+        }
+}
+    
 const bot = new Bot(adapter)
     .use(new MemoryStorage())
     .use(new BotStateManager())
     .use(new ActiveRouter())
-    .onReceive(c => router.route(c).toPromise());
+    .onReceive(botLogic);
