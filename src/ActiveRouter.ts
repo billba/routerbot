@@ -18,7 +18,7 @@ export const tryActiveRouter = () => ifMatches(c => c.state.conversation.promptS
         ? { value: c.state.conversation.promptState }
         : { reason: 'noPromptState'}
     )
-    .thenTry(promptState => NamedRouter.getRouter(promptState.name, promptState.args))
+    .thenTry((c, promptState) => NamedRouter.getRouter(promptState.name, promptState.args))
     .beforeDo(c => c.clearActiveRouter());
 
 import { Activity, Middleware } from 'botbuilder-core';

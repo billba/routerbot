@@ -1,7 +1,7 @@
 import { Bot, MemoryStorage, BotStateManager } from 'botbuilder-core';
 import { BotFrameworkAdapter } from 'botbuilder-services';
 import { createServer } from 'restify';
-import { Router, tryInOrder, tryInScoreOrder, ifMatches, ifTrue, ifMessage, ifText, ifRegExp, ifNumber } from 'prague-botbuilder';
+import { Router, tryInOrder, tryInScoreOrder, trySwitch, ifMatches, ifTrue, ifMessage, ifText, ifRegExp, ifNumber, route } from 'prague-botbuilder';
 import { tryActiveRouter, ActiveRouter, NamedRouter } from './ActiveRouter';
 import 'isomorphic-fetch';
 
@@ -71,30 +71,30 @@ const getTitle = (id: string) => fetch(`https://jsonplaceholder.typicode.com/pos
     .then(response => response.json())
     .then((response: JsonResponse) => response.title);
 
-const botLogic = (c: BotContext) => {
-    switch(c.request.type) {
-        case 'message':
-            return tryInOrder(
+const ifTitle = (id: string) => ifMatches(c => getTitle(id));
+
+const botLogic = (c: BotContext) => 
+    trySwitch(c => c.request.type, {
+        'message':
+            tryInOrder(
                 tryActiveRouter(),
                 ifRegExp(/My name is (.+)/i)
                     .thenDo((c, matches) => c.reply(`Nice to meet you, ${matches[1]}!!`)),
                 ifRegExp(/howdy|hi|hello|yo|hey|wassup/i)
                     .thenDo(c => c.reply("Hello to you")),
-                ifRegExp(/title for (\d+)/i).thenTry(matches =>
-                    ifMatches(c => getTitle(matches[1]))
-                        .thenDo((c, response) => c.reply(`The title was "${response}"`))
-                        .elseDo(c => c.reply(`There is no title for ${matches[1]}.`))
+                ifRegExp(/title for (\d+)/i).thenTry((c, matches) =>
+                    ifTitle(matches[1])
+                        .thenDo((c, title) => c.reply(`The title was "${title}"`))
+                        .elseDo((c, reason) => c.reply(`There is no title for ${matches[1]}.`))
                 ),
                 ifRegExp(/interview me/i)
                     .thenDo(c => interviewMe(c)),
             )
             .defaultDo(c => c.reply("I just don't understand you humans."))
-            .route(c); 
-        default:
-            c.reply("Non-message activity");
-        }
-}
-    
+    })
+        .defaultDo(c => c.reply("Non-message activity"))
+        .route(c);
+
 const bot = new Bot(adapter)
     .use(new MemoryStorage())
     .use(new BotStateManager())
