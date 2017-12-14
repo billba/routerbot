@@ -73,9 +73,9 @@ const getTitle = (id: string) => fetch(`https://jsonplaceholder.typicode.com/pos
 
 const ifTitle = (id: string) => ifMatches(c => getTitle(id));
 
-const botLogic = (c: BotContext) => 
-    trySwitch(c => c.request.type, {
-        'message':
+const botLogic = (c: BotContext) =>
+    ifMessage()
+        .thenTry(
             tryInOrder(
                 tryActiveRouter(),
                 ifRegExp(/My name is (.+)/i)
@@ -91,8 +91,8 @@ const botLogic = (c: BotContext) =>
                     .thenDo(c => interviewMe(c)),
             )
             .defaultDo(c => c.reply("I just don't understand you humans."))
-    })
-        .defaultDo(c => c.reply("Non-message activity"))
+        )
+        .elseDo(c => c.reply("Non-message activity"))
         .route(c);
 
 const bot = new Bot(adapter)
