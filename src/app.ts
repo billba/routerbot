@@ -1,8 +1,7 @@
 import { Bot, MemoryStorage, BotStateManager } from 'botbuilder-core';
 import { BotFrameworkAdapter } from 'botbuilder-services';
 import { createServer } from 'restify';
-import { Router, tryInOrder, tryInScoreOrder, trySwitch, ifMatches, ifTrue, ifMessage, ifText, ifRegExp, ifNumber, route } from 'prague-botbuilder';
-import { tryActiveRouter, ActiveRouter, NamedRouter } from './ActiveRouter';
+import * as p from 'prague-fluent';
 import 'isomorphic-fetch';
 
 // Create server
@@ -21,82 +20,127 @@ server.post('/api/messages', adapter.listen() as any);
 
 interface Profile {
     name: string;
+    phone: string;
     age: number;
 }
 
-const interviewMe = (c: BotContext, profile = {} as Partial<Profile>) => {
-    if (profile.name === undefined) {
-        c.reply("What's your name?");
-        return c.setActiveRouter(askForName, profile);
+declare global {
+    interface ConversationState {
+        outstandingPrompts: Array<string>;
+        profile: Partial<Profile>;
     }
-
-    if (profile.age === undefined) {
-        c.reply("How old are you?");        
-        return c.setActiveRouter(askForAge, profile);
-    }
-
-    c.reply(`Great, your name is ${profile.name} and you are ${profile.age} years old.`)
 }
 
-const askForName = new NamedRouter<Profile>('askForName', profile => ifText()
-    .thenDo((c, name) => interviewMe(c, {
-        ... profile,
-        name
-    }))
-    .elseDo(c => {
-        c.reply("I'd really like to know your name.");
-        c.setActiveRouter(askForName, profile);
-    })
-);
+const regExp = (regExp: RegExp, c: BotContext) => () =>
+    c.request.type === 'message' && regExp.exec(c.request.text);
 
-const askForAge = new NamedRouter<Profile>('askForAge', profile => ifNumber()
-    .thenDo((c, age) => interviewMe(c, {
-        ... profile,
-        age
-    }))
-    .elseDo((c, reason) => {
-        c.reply("I'd really like to know your age.");
-        c.setActiveRouter(askForAge, profile);
-    })
-);
-
-interface JsonResponse {
-    userId: string;
-    id: string;
-    title: string;
-    body: string;
+interface PromptRouters {
+    [promptID: string]: p.AnyRouter;
 }
 
-const getTitle = (id: string) => fetch(`https://jsonplaceholder.typicode.com/posts/${id}`)
-    .then(response => response.json())
-    .then((response: JsonResponse) => response.title);
+const addName = (c: BotContext, name: string) => {
+    c.reply(`Got it! Your name is ${name}`);
+    c.state.conversation.profile.name = name;
+    removeFromOutstandingPrompts(c, 'name');
+}
 
-const ifTitle = (id: string) => ifMatches(c => getTitle(id));
+const promptRouters = (c: BotContext): PromptRouters => ({
+    'name':
+        p.ifGet(regExp(/\D+/, c),
+            p.do(match => addName(c, match.value[0])),
+            p.do(no => addName(c, c.request.text), .25)
+        ),
+
+    'age':
+        p.ifGet(regExp(/\d{1,4}/, c), match =>
+            p.ifGet(
+                () => {
+                    const num = parseInt(match.value[0]);
+                    if (num > 0 && num < 200)
+                        return num;
+                },
+                p.do(match => {
+                    c.reply(`Got it! Your age is ${match.value}`);
+                    c.state.conversation.profile.age = match.value;
+                    removeFromOutstandingPrompts(c, 'age');
+                }),
+                p.do(
+                    () => c.reply(`Age must be between 1 and 200`),
+                    .4
+                )
+            )
+        ),
+
+    'phone':
+        p.ifGet(regExp(/^\d{3}-\d{3}-\d{4}$/, c),
+            p.do(match => {
+                const digits = match.value[0]
+                c.reply(`Got it! Your phone number is ${digits}`)
+                c.state.conversation.profile.phone = digits;
+                removeFromOutstandingPrompts(c, 'phone');
+            }),
+            p.ifGet(regExp(/\d{4,}/, c),
+                p.do(
+                    () => c.reply("Phone numbers must be of the form XXX-YYY-ZZZZ"),
+                    0.5
+                )
+            )
+        )
+});
+
+const addToOutstandingPrompts = (c: BotContext, promptID: string) => {
+    if (!c.state.conversation.outstandingPrompts)
+        c.state.conversation.outstandingPrompts = [];
+    c.state.conversation.outstandingPrompts.push(promptID);
+}
+
+const removeFromOutstandingPrompts = (c: BotContext, promptID: string) => {
+    c.state.conversation.outstandingPrompts = c.state.conversation.outstandingPrompts.filter(_promptID => _promptID !== promptID)
+}
+
+const outstandingPromptRouters = (c: BotContext) =>
+    c.state.conversation.outstandingPrompts.map(promptID => promptRouters(c)[promptID]);
+
+const tryOutstandingPrompts = (c: BotContext) => {
+    if (!c.state.conversation.outstandingPrompts || c.state.conversation.outstandingPrompts.length === 0)
+        return;
+    
+    return p
+        .best(
+            ... outstandingPromptRouters(c)
+        )
+        .afterDo(() => completePrompts(c))
+        .default(p.do(() => c.reply("Sorry, I don't know what you're trying to tell me.")));
+}
+
+const interviewMe = (c: BotContext) => {
+    c.reply("I'd like to get to know you. Please tell me your name, age, and phone number.");
+    c.state.conversation.profile = {};
+    addToOutstandingPrompts(c, 'phone');
+    addToOutstandingPrompts(c, 'age');
+    addToOutstandingPrompts(c, 'name');
+}
+
+const completePrompts = (c: BotContext) => {
+    if (c.state.conversation.outstandingPrompts.length === 0) {
+        c.reply("Thanks, nice to know you!!");
+    }
+}
 
 const botLogic = (c: BotContext) =>
-    ifMessage()
-        .thenTry(
-            tryInOrder(
-                tryActiveRouter(),
-                ifRegExp(/My name is (.+)/i)
-                    .thenDo((c, matches) => c.reply(`Nice to meet you, ${matches[1]}!!`)),
-                ifRegExp(/howdy|hi|hello|yo|hey|wassup/i)
-                    .thenDo(c => c.reply("Hello to you")),
-                ifRegExp(/title for (\d+)/i).thenTry((c, matches) =>
-                    ifTitle(matches[1])
-                        .thenDo((c, title) => c.reply(`The title was "${title}"`))
-                        .elseDo((c, reason) => c.reply(`There is no title for ${matches[1]}.`))
-                ),
-                ifRegExp(/interview me/i)
-                    .thenDo(c => interviewMe(c)),
-            )
-            .defaultDo(c => c.reply("I just don't understand you humans."))
-        )
-        .elseDo(c => c.reply("Non-message activity"))
-        .route(c);
+    p.if(() => c.request.type === 'message',
+        p.first(
+            tryOutstandingPrompts(c),
+            p.ifGet(regExp(/interview me/i, c),
+                p.do(() => interviewMe(c))
+            ),
+            p.do(() => c.reply("I just don't understand you humans."))
+        ),
+        p.do(() => c.reply("Non-message activity"))
+    )
+    .route();
 
 const bot = new Bot(adapter)
     .use(new MemoryStorage())
     .use(new BotStateManager())
-    .use(new ActiveRouter())
     .onReceive(botLogic);

@@ -13,10 +13,9 @@
   "license": "ISC",
   "dependencies": {
     "botbuilder-core": "^4.0.0-h3.3",
-    "botbuilder-prompts": "^4.0.0-h3.3",
     "botbuilder-services": "^4.0.0-h3.3",
     "isomorphic-fetch": "^2.2.1",
-    "prague-botbuilder": "^0.16.6",
+    "prague-fluent": "0.17.2",
     "restify": "^6.3.1"
   },
   "devDependencies": {
