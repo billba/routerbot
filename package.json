@@ -15,12 +15,12 @@
     "botbuilder-core": "^4.0.0-h3.3",
     "botbuilder-services": "^4.0.0-h3.3",
     "isomorphic-fetch": "^2.2.1",
-    "prague-fluent": "0.17.2",
+    "prague-fluent": "0.17.11",
     "restify": "^6.3.1"
   },
   "devDependencies": {
     "@types/node": "^8.0.48",
     "@types/restify": "^5.0.6",
-    "typescript": "^2.6.1"
+    "typescript": "^2.6.2"
   }
 }
