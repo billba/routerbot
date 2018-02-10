@@ -3,6 +3,8 @@ import { BotFrameworkAdapter } from 'botbuilder-services';
 import { createServer } from 'restify';
 import * as p from 'prague-fluent';
 import 'isomorphic-fetch';
+import { MatchRoute, MultipleRoute, TemplateRoute } from 'prague-fluent';
+import { race } from 'rxjs/operators/race';
 
 // Create server
 let server = createServer();
@@ -18,162 +20,96 @@ const adapter = new BotFrameworkAdapter({
 
 server.post('/api/messages', adapter.listen() as any);
 
-interface Profile {
-    name: string;
-    phone: string;
-    age: number;
-}
-
 declare global {
     interface ConversationState {
-        outstandingPrompts: Array<string>;
-        profile: Partial<Profile>;
-        routes: Array<any>;
+        prompt?: string;
+        routes?: p.TemplateRoute[];
     }
 }
 
-const regExp = (regExp: RegExp, c: BotContext) => () =>
-    c.request.type === 'message' && regExp.exec(c.request.text);
-
-interface PromptRouters {
-    [promptID: string]: p.AnyRouter;
-}
+const regExp = (regExp: RegExp, c: BotContext) => () => regExp.exec(c.request.text);
 
 const templates = new p.Templates<
     {
-        addName: string,
-        addAge: number,
-        correctAge: undefined,
-        addPhone: string,
-        correctPhone: undefined,
-        tieBreaker: p.MultipleRoute,
+        showTime: {
+            time: string
+        },
+        interviewMe: undefined,
+        greeting: string,
+        disambiguate: MultipleRoute,
     },
     BotContext
 >(c => ({
-    addName(name) {
-        c.reply(`Got it! Your name is ${name}`);
-        c.state.conversation.profile.name = name;
-        removeFromOutstandingPrompts(c, 'name');
+
+    showTime(time) {
+        c.reply(`The local time is ${time.time}`);
     },
 
-    addAge(age) {
-        c.reply(`Got it! Your age is ${age}`);
-        c.state.conversation.profile.age = age;
-        removeFromOutstandingPrompts(c, 'age');
+    interviewMe() {
+        c.state.conversation.prompt = 'name';
+        return c.reply(`What's your name?`);
     },
 
-    addPhone(phone) {
-        c.reply(`Got it! Your phone number is ${phone}`)
-        c.state.conversation.profile.phone = phone;
-        removeFromOutstandingPrompts(c, 'phone');
+    greeting(name) {
+        c.state.conversation.prompt = undefined;
+        return c.reply(`Nice to meet you, ${name}`);
     },
 
-    correctAge () {
-        c.reply(`Age must be between 1 and 200`);
-    },
-
-    correctPhone() {
-        c.reply(`Phone must be of the form xxx-yyy-zzzz`);
-    },
-
-    tieBreaker(route) {
-        c.reply("We've got a tie! Tell me which you mean:")
-        route.routes.forEach((route, i) => {
-            c.reply(`"${route.source}"`);
-        });
+    disambiguate(route) {
         c.state.conversation.routes = route.routes;
-        addToOutstandingPrompts(c, 'tieBreaker');
+        c.reply(`Are you telling me:`)
+        route.routes.forEach(route => {
+            c.reply(`${route.source}`);
+        });
+        c.state.conversation.prompt = 'disambiguate';
     },
+
 }));
 
-const promptRouters = (c: BotContext): PromptRouters => ({
-    'name':
-        p.ifGet(regExp(/\D+/, c),
-            templates.router('addName', c.request.text, "your name"),
-            templates.router('addName', c.request.text, "your name", .25)
-        ),
-
-    'age':
-        p.ifGet(regExp(/\d{1,4}/, c), match =>
-            p.ifGet(
-                () => {
-                    const num = parseInt(match.value[0]);
-                    if (num > 0 && num < 200)
-                        return num;
-                },
-                match => templates.route('addAge', match.value, "your age"),
-                templates.router('correctAge', undefined, "your age", .5)
-            )
-        ),
-
-    'phone':
-        p.ifGet(regExp(/^\d{3}-\d{3}-\d{4}$/, c),
-            templates.router('addPhone', c.request.text, "your phone"),
-            p.ifGet(regExp(/\d{3,}/, c),
-                templates.router('correctPhone', undefined, "your phone", .5),
-            )
-        ),
-
-    'tieBreaker':
-        p.ifGet(
-            () => c.state.conversation.routes.find(route => route.source === c.request.text),
-            match => templates.route(match.value.action, match.value.args)
-        )
-});
-
-const addToOutstandingPrompts = (c: BotContext, promptID: string) => {
-    if (!c.state.conversation.outstandingPrompts)
-        c.state.conversation.outstandingPrompts = [];
-    c.state.conversation.outstandingPrompts.push(promptID);
-}
-
-const removeFromOutstandingPrompts = (c: BotContext, promptID: string) => {
-    c.state.conversation.outstandingPrompts = c.state.conversation.outstandingPrompts.filter(_promptID => _promptID !== promptID)
-}
-
-const outstandingPromptRouters = (c: BotContext) =>
-    c.state.conversation.outstandingPrompts.map(promptID => promptRouters(c)[promptID]);
-
-const tryOutstandingPrompts = (c: BotContext) => {
-    if (!c.state.conversation.outstandingPrompts || c.state.conversation.outstandingPrompts.length === 0)
-        return;
-    
-    return p
-        .best(
-            ... outstandingPromptRouters(c)
-        )
-        .mapMultiple(route => templates.route('tieBreaker', route))
-        .mapTemplate(templates, c)
-        .afterDo(() => completePrompts(c))
-        .default(p.do(() => c.reply("Sorry, I don't know what you're trying to tell me.")));
-}
-
-const interviewMe = (c: BotContext) => {
-    c.reply("I'd like to get to know you. Please tell me your name, age, and phone number.");
-    c.state.conversation.profile = {};
-    addToOutstandingPrompts(c, 'phone');
-    addToOutstandingPrompts(c, 'age');
-    addToOutstandingPrompts(c, 'name');
-}
-
-const completePrompts = (c: BotContext) => {
-    if (c.state.conversation.outstandingPrompts.length === 0) {
-        c.reply("Thanks, nice to know you!!");
-    }
-}
-
 const botLogic = (c: BotContext) => {
-    if (c.request.type === 'message')
-        return p
-            .first(
-                tryOutstandingPrompts(c),
-                p.ifGet(regExp(/interview me/i, c),
-                    p.do(() => interviewMe(c))
-                ),
-                p.do(() => c.reply("I just don't understand you humans."))
+    p.first(
+        () => {
+            if (c.request.type !== 'message')
+                return p.do(() => c.reply("Non-message activity"));
+        },
+        p.match(regExp(/interview me/, c),
+            templates.router('interviewMe')
+        ),
+        p.best(
+            () => {
+                switch (c.state.conversation.prompt) {
+                    case 'name': {
+                        return p.best(
+                            p.match(regExp(/I am (.*)/i, c),
+                                match => templates.route('greeting', match.value[1], "name", 1.0)
+                            ),
+                            p.match(regExp(/d+/, c),
+                                match => templates.route('greeting', match.value[1], "name", .1),
+                                templates.router('greeting', c.request.text, "name", .5),
+                            )
+                        )
+                    }
+
+                    case 'disambiguate': {
+                        const route = c.state.conversation.routes.find(route => route.source === c.request.text);
+                        if (route) {
+                            c.state.conversation.prompt = undefined;
+                            return new p.TemplateRoute(route.action, route.args);
+                        }
+                    }
+                }
+            },
+            p.match(regExp(/time/, c),
+                templates.router('showTime', { time: new Date().toLocaleTimeString() }, "time", .5)
             )
-            .do();
-    c.reply("Non-message activity");
+        )
+        .mapMultiple(route => templates.router('disambiguate', route))
+    )
+    .mapTemplate(templates, c)
+    .default(
+        p.do(() => c.reply(`I don't understand you humans.`))
+    )
+    .do();
 }
 
 const bot = new Bot(adapter)
