@@ -12,8 +12,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "botbuilder-core": "^4.0.0-h3.3",
-    "botbuilder-services": "^4.0.0-h3.3",
+    "botbuilder": "^4.0.0-m1.0",
+    "botbuilder-node": "^4.0.0-m1.1",
+    "botbuilder-services": "^4.0.0-m1.2",
     "isomorphic-fetch": "^2.2.1",
     "prague-fluent": "0.17.13",
     "restify": "^6.3.1"
