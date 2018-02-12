@@ -67,9 +67,9 @@ bot
     })
     .use({
         async receiveActivity(context, next) {
-            context.reply(`${context.state.conversation.count}: start`);
+            context.reply(`{ ${context.state.conversation.count}`);
             await next();
-            context.reply(`${context.state.conversation.count}: end`);
+            context.reply(`}`);
         }
     })
     .use(toUpper)
