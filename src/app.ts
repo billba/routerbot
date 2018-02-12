@@ -1,7 +1,7 @@
 import { ConsoleAdapter } from 'botbuilder-node';
 import { Bot, Middleware, MemoryStorage, BotStateManager } from 'botbuilder';
 import { BotFrameworkAdapter } from 'botbuilder-services';
-import { createServer } from 'restify';
+import 'isomorphic-fetch';
 
 const toUpper: Middleware = {
     async postActivity(context, activities, postActivity) {
@@ -76,6 +76,17 @@ bot
     .onReceive(context => {
         context.reply('hello world');
         if (context.request.type === 'message') {
+            const text = context.request.text;
+
+            const matches = /star wars (\d+)/.exec(text);
+            if (matches)
+                return fetch(`https://swapi.co/api/people/${matches[1]}`)
+                    .then(res => res.json())
+                    .then(json => json.name)
+                    .then(name => {
+                        context.reply(name);
+                    });
+
             switch(context.state.conversation.prompt) {
                 case 'name': {
                     context.reply(`Nice to meet you, ${context.request.text}`);
@@ -108,13 +119,14 @@ bot
         * listen
     2. Introduce Bot and context
         * responses.push, then reply
-        * state
-        * before/after
+        * fetch (promises)
+        * simple prompt
+        * state => multi-instance state
+        * count, before/after
     3. Proactive messages
     4. Middleware
         * state
         * before/after
         * toUpper (then move into functions)
         * knock knock (state-driven)
-    5. Multi-instance state
 */
