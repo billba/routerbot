@@ -2,9 +2,12 @@ import { Promiseable } from 'botbuilder';
 
 export const toPromise = <T> (t: Promiseable<T>) => t instanceof Promise ? t : Promise.resolve(t);
 
-interface TopicInstance<State = any> {
-    readonly topicName: string;
-    state: State;
+class TopicInstance <State = any> {
+    constructor(
+        public topicName: string,
+        public state = {} as State,
+    ) {
+    }
 }
 
 declare global {
@@ -93,7 +96,6 @@ interface TopicMethods <
 export class Topic <
     State = any,
     InitArgs = any,
-    Instance extends TopicInstance<State> = TopicInstance<State>,
 > {
     private static topics: {
         [name: string]: Topic;
@@ -104,7 +106,7 @@ export class Topic <
 
     constructor (
         public name: string,
-        topicMethods: Partial<TopicMethods<State, InitArgs>>,
+        topicMethods: Partial<TopicMethods<State, InitArgs, TopicInstance<State>>>,
     ) {
         if (Topic.topics[name])
             throw new Error(`An attempt was made to create a topic with existing name ${name}. Ignored.`);
@@ -117,14 +119,14 @@ export class Topic <
 
     protected async saveInstance (
         context: BotContext,
-        instance: Instance,
+        instance: TopicInstance<State>,
         args?: InitArgs,
     ) {
         await toPromise(this.init(context, instance, args));
 
-        context.state.conversation.topics.instances[Date.now().toString()] = instance;
-
-        return instance;
+        const instanceName = Date.now().toString();
+        context.state.conversation.topics.instances[instanceName] = instance;
+        return instanceName;
     }
 
     createInstance (
@@ -133,10 +135,7 @@ export class Topic <
     ) {
         return this.saveInstance(
             context,
-            {
-                topicName: Date.now().toString(),
-                state: {} as State,
-            } as Instance,
+            new TopicInstance(this.name),
             args,
         );
     }
@@ -148,7 +147,7 @@ export class Topic <
         context.state.conversation.topics.rootInstanceName = instanceName;
     }
 
-    static onReceive (
+    static dispatchToInstance (
         context: BotContext,
         instanceName: string,
     ): Promise<void> {
@@ -173,30 +172,27 @@ export class Topic <
 type TopicCallback <
     State = any,
     Response = any,
-    Instance extends TopicInstance<State> = TopicInstance<State>,
 > = (
     context: BotContext,
     response: Response,
-    instance: Instance,
+    instance: TopicInstance<State>,
 ) => Promiseable<void>;
 
 type NormalizedTopicCallback <
     State = any,
     Response = any,
-    Instance extends TopicInstance<State> = TopicInstance<State>,
 > = (
     context: BotContext,
     response: Response,
-    instance: Instance,
+    instance: TopicInstance<State>,
 ) => Promise<void>;
 
 const normalizedTopicCallback = <
     State = any,
     Response = any,
-    Instance extends TopicInstance<State> = TopicInstance<State>,
 > (
-    callback: TopicCallback<State, Response, Instance>
-): NormalizedTopicCallback<State, Response, Instance> => (
+    callback: TopicCallback<State, Response>
+): NormalizedTopicCallback<State, Response> => (
     context,
     response,
     instance,
@@ -210,15 +206,14 @@ interface TopicMethodsWithCallback <
     Response = any,
     Instance extends TopicInstance<State> = TopicInstance<State>,
 > extends TopicMethods<State, InitArgs, Instance> {
-    callback: TopicCallback<State, Response, Instance>;
+    callback: TopicCallback<State, Response>;
 }
 
 export abstract class TopicWithCallbacks <
     State = any,
     InitArgs = any,
     Response = any,
-    Instance extends TopicInstance<State> = TopicInstance<State>,
-> extends Topic<State, InitArgs, Instance> {
+> extends Topic<State, InitArgs> {
     protected callback: TopicCallback<State, Response>;
 
     constructor (
@@ -230,19 +225,24 @@ export abstract class TopicWithCallbacks <
     }
 }
 
-interface TopicInstanceWithChild <State = any> extends TopicInstance <State> {
-    child: string;
+class TopicInstanceWithChild <State = any> extends TopicInstance<State> {
+    constructor(
+        topicName: string,
+        state = {} as State,
+        public child = undefined as string,
+    ) {
+        super(topicName, state);
+    }
 }
 
 export class TopicWithChild <
     State = any,
     InitArgs = any,
     Response = any,
-    Instance extends TopicInstanceWithChild<State> = TopicInstanceWithChild<State>
-> extends TopicWithCallbacks<State, InitArgs, Response, Instance> {
+> extends TopicWithCallbacks<State, InitArgs, Response> {
     constructor (
         public name: string,
-        topicMethods: Partial<TopicMethodsWithCallback<State, InitArgs, Response, Instance>>,
+        topicMethods: Partial<TopicMethodsWithCallback<State, InitArgs, Response, TopicInstanceWithChild<State>>>,
     ) {
         super (name, topicMethods);
     }
@@ -253,29 +253,30 @@ export class TopicWithChild <
     ) {
         return this.saveInstance(
             context,
-            {
-                topicName: Date.now().toString(),
-                state: {} as State,
-                child: undefined,
-            } as Instance,
+            new TopicInstanceWithChild(this.name),
             args,
         );
     }
 }
 
-interface TopicInstanceWithChildren <State = any> extends TopicInstance <State> {
-    children: string[];
+class TopicInstanceWithChildren <State = any> extends TopicInstance <State> {
+    constructor(
+        topicName: string,
+        state = {} as State,
+        public children = [] as string[],
+    ) {
+        super(topicName, state);
+    }
 }
 
 export class TopicWithChildren <
     State = any,
     InitArgs = any,
     Response = any,
-    Instance extends TopicInstanceWithChildren<State> = TopicInstanceWithChildren<State>,
-> extends TopicWithCallbacks <State, InitArgs, Response, Instance> {
+> extends TopicWithCallbacks <State, InitArgs, Response> {
     constructor (
         public name: string,
-        topicMethods: Partial<TopicMethodsWithCallback<State, InitArgs, Response, Instance>>,
+        topicMethods: Partial<TopicMethodsWithCallback<State, InitArgs, Response, TopicInstanceWithChildren<State>>>,
     ) {
         super (name, topicMethods);
     }
@@ -286,24 +287,8 @@ export class TopicWithChildren <
     ) {
         return this.saveInstance(
             context,
-            {
-                topicName: Date.now().toString(),
-                state: {} as State,
-                children: [],
-            } as Instance,
+            new TopicInstanceWithChildren(this.name),
             args,
         );
     }
 }
-
-/*
-
-There's an interesting relationship between Topic and TopicInstance.
-
-Probably there are parallel inheritances, e.g. TopicWithChild and TopicInstanceWithChild
-
-But it's a little hard because how do you do new TopicWithChild(...) and then have it call createInstance with the right instance?
-
-I think every Topic has to have a createInstance.
-
-*/
