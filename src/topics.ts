@@ -140,7 +140,7 @@ class TopicCallbackHelper <
 
 export class Topic <
     State = any,
-    InitArgs = any,
+    InitArgs extends {} = {},
     CallbackArgs = any,
 > {
     private static topics: {
@@ -172,12 +172,31 @@ export class Topic <
         return instance.name;
     }
 
-    
-    async createInstance (
+    createInstance (
         context: BotContext,
         args?: InitArgs,
         callbackInstanceName?: string,
+    ): Promise<string>;
+
+    createInstance (
+        context: BotContext,
+        callbackInstanceName?: string,
+    ): Promise<string>;
+    
+    async createInstance (
+        context: BotContext,
+        ... params,
     ) {
+        let args: InitArgs = params.length > 0 && typeof params[0] !== 'string'
+            ? params[0]
+            : {}
+        
+        let callbackInstanceName: string = params.length > 0 && typeof params[0] === 'string'
+            ? params[0]
+            : params.length > 1 && typeof params[1] === 'string'
+                ? params[1]
+                : undefined;
+     
         const data = {} as TopicInitHelperData<CallbackArgs>;
         const instance = new TopicInstance<State>(this.name, callbackInstanceName);
 

@@ -73,18 +73,11 @@ const alarmBot = new Topic<AlarmBot>('alarmBot', {
             return Topic.dispatchToInstance(context, topic.instance.state.child);
         else if (context.request.type === 'message') {
             if (context.request.text === "set alarm") {
-                topic.instance.state.child = await setAlarm.createInstance(
-                    context,
-                    {},
-                    topic.instance.name,
-                );
+                topic.instance.state.child = await setAlarm.createInstance(context, topic.instance.name);
             } else if (context.request.text === "show alarms") {
-                topic.instance.state.child = await showAlarms.createInstance(
-                    context,
-                    {
-                        alarms: topic.instance.state.alarms
-                    }
-                );
+                topic.instance.state.child = await showAlarms.createInstance(context, {
+                    alarms: topic.instance.state.alarms
+                });
             } else {
                 context.reply(`I didn't understand that.`);
             }
