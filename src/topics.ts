@@ -2,21 +2,15 @@ import { Promiseable } from 'botbuilder';
 
 const toPromise = <T> (t: Promiseable<T>) => t instanceof Promise ? t : Promise.resolve(t);
 
-interface Callback {
-    instanceName: string,
-    tag: string,
-}
-
 class TopicInstance <State = any> {
     public name: string;
     public state = {} as State;
 
     constructor(
         public topicName: string,
-        public callback?: Callback,
+        public callbackInstanceName?: string,
     ) {
     }
-
 }
 
 declare global {
@@ -99,8 +93,6 @@ class TopicOnReceiveHelper <
     complete (
         args: CallbackArgs,
     ) {
-        if (!this.instance.callback)
-            throw "you need to provide a callback before calling complete()";
         this.data.complete = true;
         this.data.args = args;
     }
@@ -116,19 +108,6 @@ type TopicOnReceive <
     topic: TopicOnReceiveHelper<State, CallbackArgs, Instance>
 ) => T;
 
-type TopicCallback <
-    State,
-    Instance extends TopicInstance<State>,
-    CallbackArgs,
-    T
-> = (
-    context: BotContext,
-    instance: Instance,
-    args: CallbackArgs,
-    tag: string,
-    childInstanceName: string,
-) => T;
-
 interface TopicMethods <
     State,
     InitArgs,
@@ -137,7 +116,26 @@ interface TopicMethods <
 > {
     init: TopicInit<State, InitArgs, CallbackArgs, Instance, Promiseable<void>>;
     onReceive: TopicOnReceive<State, CallbackArgs, Instance, Promiseable<void>>;
-    callback: TopicCallback<State, Instance, CallbackArgs, Promiseable<void>>;
+}
+
+type TopicCallback <
+    State,
+    CallbackArgs,
+> = (
+    context: BotContext,
+    topicCallbackHelper: TopicCallbackHelper<State, CallbackArgs>,
+) => Promise<void>;
+
+class TopicCallbackHelper <
+    State,
+    CallbackArgs,
+> {
+    constructor(
+        public instance: TopicInstance<State>,
+        public args: CallbackArgs,
+        public child: string,
+    ) {
+    }
 }
 
 export class Topic <
@@ -151,7 +149,6 @@ export class Topic <
 
     protected init: TopicInit<State, InitArgs, CallbackArgs, TopicInstance<State>, Promise<void>>;
     protected onReceive: TopicOnReceive<State, CallbackArgs, TopicInstance<State>, Promise<void>>;
-    protected callback: TopicCallback<State, TopicInstance<State>, CallbackArgs, Promise<void>>;
 
     constructor (
         public name: string,
@@ -162,7 +159,6 @@ export class Topic <
         
         this.init = (context, topic) => toPromise((topicMethods.init || (() => {}))(context, topic));
         this.onReceive = (context, instance) => toPromise((topicMethods.onReceive || (() => {}))(context, instance));
-        this.callback = (context, instance, args, tag, childInstanceName) => toPromise((topicMethods.callback || (() => {}))(context, instance, args, tag, childInstanceName));
 
         Topic.topics[name] = this;
     }
@@ -176,18 +172,18 @@ export class Topic <
         return instance.name;
     }
 
+    
     async createInstance (
         context: BotContext,
         args?: InitArgs,
-        callback?: Callback, 
+        callbackInstanceName?: string,
     ) {
         const data = {} as TopicInitHelperData<CallbackArgs>;
-        const instance = new TopicInstance<State>(this.name, callback);
+        const instance = new TopicInstance<State>(this.name, callbackInstanceName);
 
         await toPromise(this.init(context, new TopicInitHelper(context, instance, args, data)));
         if (data.complete) {
-            if (instance.callback)
-                await Topic.completeInstance(context, instance, data.args);
+            await Topic.completeInstance(context, instance, data.args);
             return undefined;
         } else {
             const instanceName = this.saveInstance(context, instance);
@@ -241,22 +237,18 @@ export class Topic <
         }
     }
 
-    static completeInstance <CallbackArgs = any> (
+    static async completeInstance <CallbackArgs = any> (
         context: BotContext,
         instance: TopicInstance<any>,
         args: CallbackArgs,
     ) {
-        const callback = instance.callback;
-
-        if (!callback) {
-            console.warn(`No callback registered for instance ${instance.name}`);
-            return Promise.resolve();
-        }
-
-        const parentInstance = context.state.conversation.topical.instances[callback.instanceName];
+        if (!instance.callbackInstanceName)
+            return;
+                
+        const parentInstance = context.state.conversation.topical.instances[instance.callbackInstanceName];
 
         if (!parentInstance) {
-            console.warn(`Unknown parent instance ${callback.instanceName}`);
+            console.warn(`Unknown parent instance ${instance.callbackInstanceName}`);
             return Promise.resolve();
         }
 
@@ -267,18 +259,22 @@ export class Topic <
             return Promise.resolve();
         }
 
-        return topic.callback(context, parentInstance, args, callback.tag, instance.name);
+        const topicCallbackHelper = new TopicCallbackHelper(parentInstance, args, instance.name);
+
+        await topic.callbacks[instance.topicName](context, topicCallbackHelper);
     }
-}
 
+    callbacks: {
+        [topicName: string]: TopicCallback<any, any>;
+    } = {}
 
-class ParentTopicInstance <State = any> extends TopicInstance <State> {
-    public children = [] as string[];
-
-    constructor(
-        topicName: string,
-        callback?: Callback,
+    onComplete <C> (
+        topic: Topic<any, any, C>,
+        callback: TopicCallback<State, C>,
     ) {
-        super(topicName, callback);
+        if (this.callbacks[topic.name])
+            throw new Error(`An attempt was made to create a callback with existing topic named ${topic.name}. Ignored.`);
+
+        this.callbacks[topic.name] = callback;
     }
 }

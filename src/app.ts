@@ -47,7 +47,7 @@ const setAlarm = new Topic<Partial<Alarm>, Partial<Alarm>, Alarm>('addAlarm', {
                     when: new Date(),
                 });
             }  else {
-                context.reply(`I didn't understand that.`);
+                context.reply(`I really didn't understand that.`);
             }
         }
     }
@@ -61,7 +61,7 @@ const showAlarms = new Topic<undefined, { alarms: Alarm[] }>('showAlarms', {
     }
 });
 
-const alarmBot = new Topic<AlarmBot>('alarmbot', {
+const alarmBot = new Topic<AlarmBot>('alarmBot', {
     init (context, topic) {
         context.reply(`Welcome to Alarm Bot! I know how to set, show, and delete alarms.`);
         topic.instance.state.child = undefined;
@@ -73,34 +73,29 @@ const alarmBot = new Topic<AlarmBot>('alarmbot', {
             return Topic.dispatchToInstance(context, topic.instance.state.child);
         else if (context.request.type === 'message') {
             if (context.request.text === "set alarm") {
-                topic.instance.state.child = await setAlarm.createInstance(context, {}, {
-                    instanceName: topic.instance.name,
-                    tag: 'addAlarm'
-                });
+                topic.instance.state.child = await setAlarm.createInstance(
+                    context,
+                    {},
+                    topic.instance.name,
+                );
             } else if (context.request.text === "show alarms") {
-                topic.instance.state.child = await showAlarms.createInstance(context, {
-                    alarms: topic.instance.state.alarms
-                });
+                topic.instance.state.child = await showAlarms.createInstance(
+                    context,
+                    {
+                        alarms: topic.instance.state.alarms
+                    }
+                );
             } else {
                 context.reply(`I didn't understand that.`);
             }
         }
-    },
-
-    callback (context, instance, args, tag, child) {
-        switch (tag) {
-            case 'addAlarm': {
-                if (args) {
-                    instance.state.alarms.push(args);
-                    context.reply(`Alarm successfully added!`);
-                    instance.state.child = undefined;
-                    return;
-                }
-            }
-
-            default:
-                throw "no such tag";
-        }
     }
+});
 
+alarmBot.onComplete(setAlarm, async (context, topic) => {
+    if (topic.args) {
+        topic.instance.state.alarms.push(topic.args);
+        context.reply(`Alarm successfully added!`);
+        topic.instance.state.child = undefined;
+    }
 });
