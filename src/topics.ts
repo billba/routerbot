@@ -3,7 +3,7 @@ import { Promiseable } from 'botbuilder';
 export const toPromise = <T> (t: Promiseable<T>) => t instanceof Promise ? t : Promise.resolve(t);
 
 interface TopicInstance<State = any> {
-    name: string;
+    readonly topicName: string;
     state: State;
 }
 
@@ -13,38 +13,88 @@ declare global {
             instances: {
                 [instanceName: string]: TopicInstance;
             }
-            rootInstance: string;
-        }
+            rootInstanceName: string;
+        },
     }
 }
 
+type TopicInit <
+    State = any,
+    InitArgs = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> = (
+    context: BotContext,
+    instance: Instance,
+    args: InitArgs,
+) => Promiseable<void>;
 
-type TopicInit <State = any, InitArgs = any> = (context: BotContext, state: State, args: InitArgs) => Promiseable<any>;
-type NormalizedTopicInit <State = any, InitArgs = any> = (context: BotContext, state: State, args: InitArgs) => Promise<any>;
+type NormalizedTopicInit <
+    State = any,
+    InitArgs = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> = (
+    context: BotContext,
+    instance: Instance,
+    args: InitArgs,
+) => Promise<void>;
 
-const normalizedTopicInit = <State = any, InitArgs = any> (
-    init: TopicInit<State, InitArgs>
-): NormalizedTopicInit<State, InitArgs> =>
-(context: BotContext, state: State, args?: InitArgs) => init
-    ? toPromise(init(context, state, args))
+const normalizedTopicInit = <
+    State = any,
+    InitArgs = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> (
+    init: TopicInit<State, InitArgs, Instance>
+): NormalizedTopicInit<State, InitArgs, Instance> => (
+    context,
+    instance,
+    args
+) => init
+    ? toPromise(init(context, instance, args))
     : Promise.resolve();
 
-type TopicOnReceive <State = any> = (context: BotContext, state: State) => Promiseable<any>;
-type NormalizedTopicOnReceive <State = any> = (context: BotContext, state: State) => Promise<any>;
+type TopicOnReceive <
+    State = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> = (
+    context: BotContext,
+    instance: Instance,
+) => Promiseable<void>;
 
-const normalizedTopicOnReceive = <State = any, InitArgs = any> (
-    onReceive: TopicOnReceive<State>
-): NormalizedTopicOnReceive<State> =>
-(context: BotContext, state: State) => onReceive
-    ? toPromise(onReceive(context, state))
+type NormalizedTopicOnReceive <
+    State = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> = (
+    context: BotContext,
+    instance: Instance,
+) => Promise<void>;
+
+const normalizedTopicOnReceive = <
+    State = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> (
+    onReceive: TopicOnReceive<State, Instance>
+): NormalizedTopicOnReceive<State, Instance> =>
+(
+    context,
+    instance
+) => onReceive
+    ? toPromise(onReceive(context, instance))
     : Promise.resolve();
 
-interface TopicMethods <State = any, InitArgs = any> {
-    init: TopicInit<State, InitArgs>;
-    onReceive: TopicOnReceive<State>;
+interface TopicMethods <
+    State = any,
+    InitArgs = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> {
+    init: TopicInit<State, InitArgs, Instance>;
+    onReceive: TopicOnReceive<State, Instance>;
 }
 
-export class Topic <State = any, InitArgs = any> {
+export class Topic <
+    State = any,
+    InitArgs = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> {
     private static topics: {
         [name: string]: Topic;
     }
@@ -65,86 +115,195 @@ export class Topic <State = any, InitArgs = any> {
         Topic.topics[name] = this;
     }
 
-    static async createInstance<State = any, InitArgs = any> (
+    protected async saveInstance (
         context: BotContext,
-        topic: Topic<State, InitArgs>,
+        instance: Instance,
         args?: InitArgs,
     ) {
-        const state = {} as State;
-
-        await toPromise(topic.init(context, state, args));
-
-        const instance: TopicInstance<State> = {
-            name: Date.now().toString(),
-            state,
-        }
+        await toPromise(this.init(context, instance, args));
 
         context.state.conversation.topics.instances[Date.now().toString()] = instance;
 
         return instance;
-    }  
+    }
+
+    createInstance (
+        context: BotContext,
+        args?: InitArgs,
+    ) {
+        return this.saveInstance(
+            context,
+            {
+                topicName: Date.now().toString(),
+                state: {} as State,
+            } as Instance,
+            args,
+        );
+    }
+
+    static setRoot (
+        context: BotContext,
+        instanceName: string,
+    ) {
+        context.state.conversation.topics.rootInstanceName = instanceName;
+    }
+
+    static onReceive (
+        context: BotContext,
+        instanceName: string,
+    ): Promise<void> {
+        const instance = context.state.conversation.topics.instances[instanceName];
+
+        if (!instance) {
+            console.warn(`Unknown instance ${instanceName}`);
+            return Promise.resolve();
+        }
+
+        const topic = Topic.topics[instance.topicName];
+        
+        if (!topic) {
+            console.warn(`Unknown topic ${instance.topicName}`);
+            return Promise.resolve();
+        }
+
+        return topic.onReceive(context, instance);
+    }
 }
 
-interface StateWithChild <State = any> {
+type TopicCallback <
+    State = any,
+    Response = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> = (
+    context: BotContext,
+    response: Response,
+    instance: Instance,
+) => Promiseable<void>;
+
+type NormalizedTopicCallback <
+    State = any,
+    Response = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> = (
+    context: BotContext,
+    response: Response,
+    instance: Instance,
+) => Promise<void>;
+
+const normalizedTopicCallback = <
+    State = any,
+    Response = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> (
+    callback: TopicCallback<State, Response, Instance>
+): NormalizedTopicCallback<State, Response, Instance> => (
+    context,
+    response,
+    instance,
+) => callback
+    ? toPromise(callback(context, response, instance))
+    : Promise.resolve();
+
+interface TopicMethodsWithCallback <
+    State = any,
+    InitArgs = any,
+    Response = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> extends TopicMethods<State, InitArgs, Instance> {
+    callback: TopicCallback<State, Response, Instance>;
+}
+
+export abstract class TopicWithCallbacks <
+    State = any,
+    InitArgs = any,
+    Response = any,
+    Instance extends TopicInstance<State> = TopicInstance<State>,
+> extends Topic<State, InitArgs, Instance> {
+    protected callback: TopicCallback<State, Response>;
+
+    constructor (
+        name: string,
+        topicMethods: Partial<TopicMethodsWithCallback<State, InitArgs, Response>>,
+    ) {
+        super(name, topicMethods);
+        this.callback = normalizedTopicCallback(topicMethods.callback);
+    }
+}
+
+interface TopicInstanceWithChild <State = any> extends TopicInstance <State> {
     child: string;
-    state: State;
 }
 
-export class TopicWithChild  <State = any, InitArgs = any> extends Topic <StateWithChild<State>, InitArgs> {
+export class TopicWithChild <
+    State = any,
+    InitArgs = any,
+    Response = any,
+    Instance extends TopicInstanceWithChild<State> = TopicInstanceWithChild<State>
+> extends TopicWithCallbacks<State, InitArgs, Response, Instance> {
     constructor (
         public name: string,
-        topicMethods: Partial<TopicMethods<StateWithChild<State>, InitArgs>>,
+        topicMethods: Partial<TopicMethodsWithCallback<State, InitArgs, Response, Instance>>,
     ) {
-        super (name, {
-            init: (context, state, args) => normalizedTopicInit(topicMethods.init)(
-                context, {
-                    state: state.state,
-                    child: undefined
-                } as StateWithChild<State>,
-                args
-            ),
-            
-            onReceive: (context, state) => normalizedTopicOnReceive(topicMethods.onReceive)(
-                context, {
-                    state: state.state, 
-                    child: undefined
-                } as StateWithChild<State>
-            )
-        });
+        super (name, topicMethods);
+    }
+
+    createInstance (
+        context: BotContext,
+        args?: InitArgs,
+    ) {
+        return this.saveInstance(
+            context,
+            {
+                topicName: Date.now().toString(),
+                state: {} as State,
+                child: undefined,
+            } as Instance,
+            args,
+        );
     }
 }
 
-interface StateWithChildren <State = any> {
+interface TopicInstanceWithChildren <State = any> extends TopicInstance <State> {
     children: string[];
-    state: State;
 }
 
-export class TopicWithChildren  <State = any, InitArgs = any> extends Topic <StateWithChildren<State>, InitArgs> {
+export class TopicWithChildren <
+    State = any,
+    InitArgs = any,
+    Response = any,
+    Instance extends TopicInstanceWithChildren<State> = TopicInstanceWithChildren<State>,
+> extends TopicWithCallbacks <State, InitArgs, Response, Instance> {
     constructor (
         public name: string,
-        topicMethods: Partial<TopicMethods<StateWithChildren<State>, InitArgs>>,
+        topicMethods: Partial<TopicMethodsWithCallback<State, InitArgs, Response, Instance>>,
     ) {
-        super (name, {
-            init: (context, state, args) => normalizedTopicInit(topicMethods.init)(
-                context, {
-                    state: state.state,
-                    children: []
-                } as StateWithChildren<State>,
-                args
-            ),
-            
-            onReceive: (context, state) => normalizedTopicOnReceive(topicMethods.onReceive)(
-                context, {
-                    state: state.state, 
-                    children: []
-                } as StateWithChildren<State>
-            )
-        });
+        super (name, topicMethods);
+    }
+
+    createInstance (
+        context: BotContext,
+        args?: InitArgs,
+    ) {
+        return this.saveInstance(
+            context,
+            {
+                topicName: Date.now().toString(),
+                state: {} as State,
+                children: [],
+            } as Instance,
+            args,
+        );
     }
 }
 
-let foo = new TopicWithChildren<{dog: string}>('bill', {
-    init(context, state) {
-        state.state.dog = "foo"
-    }
-})
+/*
+
+There's an interesting relationship between Topic and TopicInstance.
+
+Probably there are parallel inheritances, e.g. TopicWithChild and TopicInstanceWithChild
+
+But it's a little hard because how do you do new TopicWithChild(...) and then have it call createInstance with the right instance?
+
+I think every Topic has to have a createInstance.
+
+*/
