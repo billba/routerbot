@@ -33,13 +33,12 @@ interface AlarmBot {
     alarms: Alarm[];
 }
 
-const setAlarm = new Topic<Partial<Alarm>, Partial<Alarm>, Alarm>('addAlarm', {
-    init (context, topic) {
+const setAlarm = new Topic<Partial<Alarm>, Partial<Alarm>, Alarm>('addAlarm')
+    .init((context, topic) => {
         topic.instance.state = topic.args;
         context.reply(`Let's fake setting an alarm. Type "done".`);
-    },
-
-    async onReceive (context, topic) {
+    })
+    .onReceive(async (context, topic) => {
         if (context.request.type === 'message') {
             if (context.request.text === 'done') {
                 topic.complete({
@@ -50,25 +49,22 @@ const setAlarm = new Topic<Partial<Alarm>, Partial<Alarm>, Alarm>('addAlarm', {
                 context.reply(`I really didn't understand that.`);
             }
         }
-    }
-});
+    });
 
-const showAlarms = new Topic<undefined, { alarms: Alarm[] }>('showAlarms', {
-    init (context, topic) {
+const showAlarms = new Topic<undefined, { alarms: Alarm[] }>('showAlarms')
+    .init((context, topic) => {
         context.reply(`You have the following alarms set:`);
         topic.args.alarms.forEach(alarm => context.reply(`${alarm.name} for ${alarm.when}`));
         topic.complete();
-    }
-});
+    });
 
-const alarmBot = new Topic<AlarmBot>('alarmBot', {
-    init (context, topic) {
+const alarmBot = new Topic<AlarmBot>('alarmBot')
+    .init((context, topic) => {
         context.reply(`Welcome to Alarm Bot! I know how to set, show, and delete alarms.`);
         topic.instance.state.child = undefined;
         topic.instance.state.alarms = [];
-    },
-
-    async onReceive (context, topic) {
+    })
+    .onReceive(async (context, topic) => {
         if (topic.instance.state.child)
             return Topic.dispatchToInstance(context, topic.instance.state.child);
         else if (context.request.type === 'message') {
@@ -82,13 +78,11 @@ const alarmBot = new Topic<AlarmBot>('alarmBot', {
                 context.reply(`I didn't understand that.`);
             }
         }
-    }
-});
-
-alarmBot.onComplete(setAlarm, async (context, topic) => {
-    if (topic.args) {
-        topic.instance.state.alarms.push(topic.args);
-        context.reply(`Alarm successfully added!`);
-        topic.instance.state.child = undefined;
-    }
-});
+    })
+    .onComplete(setAlarm, async (context, topic) => {
+        if (topic.args) {
+            topic.instance.state.alarms.push(topic.args);
+            context.reply(`Alarm successfully added!`);
+            topic.instance.state.child = undefined;
+        }
+    });

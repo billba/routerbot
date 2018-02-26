@@ -1,17 +1,6 @@
-import { Promiseable } from 'botbuilder';
+import { Promiseable, isPromised } from 'botbuilder';
 
-const toPromise = <T> (t: Promiseable<T>) => t instanceof Promise ? t : Promise.resolve(t);
-
-class TopicInstance <State = any> {
-    public name: string;
-    public state = {} as State;
-
-    constructor(
-        public topicName: string,
-        public callbackInstanceName?: string,
-    ) {
-    }
-}
+const toPromise = <T> (t: Promiseable<T>) => isPromised(t) ? t : Promise.resolve(t);
 
 declare global {
     interface ConversationState {
@@ -23,22 +12,35 @@ declare global {
         },
     }
 }
+class TopicInstance <State = any> {
+    public name: string;
+    public state = {} as State;
 
-interface TopicInitHelperData <CallbackArgs> {
-    complete: boolean;
-    args: CallbackArgs;
-    dispatch: boolean;
+    constructor(
+        public topicName: string,
+        public callbackInstanceName?: string,
+    ) {
+    }
 }
+
+type TopicInit <
+    State,
+    InitArgs,
+    CallbackArgs,
+    T
+> = (
+    context: BotContext,
+    topic: TopicInitHelper<State, InitArgs, CallbackArgs>,
+) => T;
 
 class TopicInitHelper <
     State,
     InitArgs,
     CallbackArgs,
-    Instance extends TopicInstance<State>,
 > {
     constructor(
         private context: BotContext,
-        public instance: Instance,
+        public instance: TopicInstance<State>,
         public args: InitArgs,
         private data: TopicInitHelperData <CallbackArgs>
     ) {
@@ -57,35 +59,38 @@ class TopicInitHelper <
     dispatch () {
         if (this.data.complete)
             throw "you may call complete() or dispatch() but not both";
+
         this.data.dispatch = true;
     }
 }
 
-type TopicInit <
-    State,
-    InitArgs,
-    CallbackArgs,
-    Instance extends TopicInstance<State>,
-    T
-> = (
-    context: BotContext,
-    topic: TopicInitHelper<State, InitArgs, CallbackArgs, Instance>,
-) => T;
-
+interface TopicInitHelperData <CallbackArgs> {
+    complete: boolean;
+    args: CallbackArgs;
+    dispatch: boolean;
+}
 
 interface TopicOnReceiveHelperData <CallbackArgs> {
     complete: boolean;
     args: CallbackArgs
 }
 
+type TopicOnReceive <
+    State,
+    CallbackArgs,
+    T
+> = (
+    context: BotContext,
+    topic: TopicOnReceiveHelper<State, CallbackArgs>
+) => T;
+
 class TopicOnReceiveHelper <
     State,
     CallbackArgs,
-    Instance extends TopicInstance<State>,
 > {
     constructor(
         private context: BotContext,
-        public instance: Instance,
+        public instance: TopicInstance<State>,
         private data: TopicOnReceiveHelperData<CallbackArgs>,
     ) {
     }
@@ -98,33 +103,14 @@ class TopicOnReceiveHelper <
     }
 }
 
-type TopicOnReceive <
-    State,
-    CallbackArgs,
-    Instance extends TopicInstance<State>,
-    T
-> = (
-    context: BotContext,
-    topic: TopicOnReceiveHelper<State, CallbackArgs, Instance>
-) => T;
-
-interface TopicMethods <
-    State,
-    InitArgs,
-    CallbackArgs,
-    Instance extends TopicInstance<State>,
-> {
-    init: TopicInit<State, InitArgs, CallbackArgs, Instance, Promiseable<void>>;
-    onReceive: TopicOnReceive<State, CallbackArgs, Instance, Promiseable<void>>;
-}
-
 type TopicCallback <
     State,
     CallbackArgs,
+    T
 > = (
     context: BotContext,
     topicCallbackHelper: TopicCallbackHelper<State, CallbackArgs>,
-) => Promise<void>;
+) => T;
 
 class TopicCallbackHelper <
     State,
@@ -138,6 +124,8 @@ class TopicCallbackHelper <
     }
 }
 
+const returnsPromiseVoid = () => Promise.resolve();
+
 export class Topic <
     State = any,
     InitArgs extends {} = {},
@@ -147,19 +135,17 @@ export class Topic <
         [name: string]: Topic;
     } = {}
 
-    protected init: TopicInit<State, InitArgs, CallbackArgs, TopicInstance<State>, Promise<void>>;
-    protected onReceive: TopicOnReceive<State, CallbackArgs, TopicInstance<State>, Promise<void>>;
+    protected _init: TopicInit<State, InitArgs, CallbackArgs, Promise<void>>;
+    protected _onReceive: TopicOnReceive<State, CallbackArgs, Promise<void>>;
 
     constructor (
         public name: string,
-        topicMethods: Partial<TopicMethods<State, InitArgs, CallbackArgs, TopicInstance<State>>>,
     ) {
         if (Topic.topics[name])
             throw new Error(`An attempt was made to create a topic with existing name ${name}. Ignored.`);
         
-        this.init = (context, topic) => toPromise((topicMethods.init || (() => {}))(context, topic));
-        this.onReceive = (context, instance) => toPromise((topicMethods.onReceive || (() => {}))(context, instance));
-
+        this._init = returnsPromiseVoid;
+        this._onReceive = returnsPromiseVoid;
         Topic.topics[name] = this;
     }
 
@@ -200,7 +186,7 @@ export class Topic <
         const data = {} as TopicInitHelperData<CallbackArgs>;
         const instance = new TopicInstance<State>(this.name, callbackInstanceName);
 
-        await toPromise(this.init(context, new TopicInitHelper(context, instance, args, data)));
+        await toPromise(this._init(context, new TopicInitHelper(context, instance, args, data)));
         if (data.complete) {
             await Topic.completeInstance(context, instance, data.args);
             return undefined;
@@ -249,7 +235,7 @@ export class Topic <
 
         const data = {} as TopicOnReceiveHelperData<any>;
 
-        await topic.onReceive(context, new TopicOnReceiveHelper(context, instance, data));
+        await topic._onReceive(context, new TopicOnReceiveHelper(context, instance, data));
 
         if (data.complete) {
             await Topic.completeInstance(context, instance, data.args);
@@ -280,20 +266,38 @@ export class Topic <
 
         const topicCallbackHelper = new TopicCallbackHelper(parentInstance, args, instance.name);
 
-        await topic.callbacks[instance.topicName](context, topicCallbackHelper);
+        await topic._callbacks[instance.topicName](context, topicCallbackHelper);
     }
 
-    callbacks: {
-        [topicName: string]: TopicCallback<any, any>;
+    init (
+        init: TopicInit<State, InitArgs, CallbackArgs, Promiseable<void>>
+    ): this {
+        this._init = (context, topic) => toPromise(init(context, topic));
+    
+        return this;
+    }
+
+    onReceive (
+        onReceive: TopicOnReceive<State, CallbackArgs, Promiseable<void>>
+    ) {
+        this._onReceive = (context, instance) => toPromise(onReceive(context, instance));
+
+        return this;
+    }
+
+    private _callbacks: {
+        [topicName: string]: TopicCallback<any, any, Promise<void>>;
     } = {}
 
     onComplete <C> (
         topic: Topic<any, any, C>,
-        callback: TopicCallback<State, C>,
+        callback: TopicCallback<State, C, Promiseable<void>>,
     ) {
-        if (this.callbacks[topic.name])
+        if (this._callbacks[topic.name])
             throw new Error(`An attempt was made to create a callback with existing topic named ${topic.name}. Ignored.`);
 
-        this.callbacks[topic.name] = callback;
+        this._callbacks[topic.name] = (context, topic) => toPromise(callback(context, topic));
+
+        return this;
     }
 }
