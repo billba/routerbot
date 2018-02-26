@@ -23,11 +23,6 @@ interface Alarm {
     when: string;
 }
 
-interface AlarmBot {
-    child: string;
-    alarms: Alarm[];
-}
-
 interface SetAlarmState {
     alarm: Partial<Alarm>;
     prompt: string;
@@ -85,7 +80,12 @@ const showAlarms = new Topic<undefined, { alarms: Alarm[] }>('showAlarms')
         topic.complete();
     });
 
-const alarmBot = new Topic<AlarmBot>('alarmBot')
+interface AlarmBotState {
+    child: string;
+    alarms: Alarm[];
+}
+
+const alarmBot = new Topic<AlarmBotState>('alarmBot')
     .init((context, topic) => {
         context.reply(`Welcome to Alarm Bot! I know how to set, show, and delete alarms.`);
         topic.instance.state.alarms = [];
