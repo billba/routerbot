@@ -1,9 +1,10 @@
 import { ConsoleAdapter } from 'botbuilder-node';
 import { Bot, MemoryStorage, BotStateManager, Middleware } from 'botbuilder';
-// import { BotFrameworkAdapter } from 'botbuilder-services';
 import 'isomorphic-fetch';
+// import { BotFrameworkAdapter } from 'botbuilder-services';
 // import { createServer } from 'restify';
 import { Topic } from './topics';
+import { stringPrompt } from './prompts';
 
 const adapter = new ConsoleAdapter();
 
@@ -28,26 +29,6 @@ interface SetAlarmState {
     child: string;
 }
 
-const promptForName = new Topic<any, any, { name: string }>('promptForName')
-    .init((context, topic) => {
-        context.reply(`What would you like to name it?`);
-    })
-    .onReceive((context, topic) => {
-        topic.complete({
-            name: context.request.text
-        })
-    });
-
-const promptForWhen = new Topic<any, any, { when: string }>('promptForWhen')
-    .init((context, topic) => {
-        context.reply(`For when would you like to set it?`);
-    })
-    .onReceive((context, topic) => {
-        topic.complete({
-            when: context.request.text
-        })
-    });
-
 const setAlarm = new Topic<SetAlarmState, Partial<Alarm>, Alarm>('addAlarm')
     .init((context, topic) => {
         topic.instance.state.alarm = topic.args;
@@ -55,12 +36,26 @@ const setAlarm = new Topic<SetAlarmState, Partial<Alarm>, Alarm>('addAlarm')
     })
     .next(async (context, topic) => {
         if (!topic.instance.state.alarm.name) {
-            topic.instance.state.child = await promptForName.createInstance(context, topic.instance.name);
+            topic.instance.state.child = await stringPrompt.createInstance(
+                context,
+                {
+                    name: 'name',
+                    prompt: 'What do you want to call it?'
+                },
+                topic.instance.name,
+            );
             return;
         }
         
         if (!topic.instance.state.alarm.when) {
-            topic.instance.state.child = await promptForWhen.createInstance(context, topic.instance.name);
+            topic.instance.state.child = await stringPrompt.createInstance(
+                context,
+                {
+                    name: 'when',
+                    prompt: 'For when do you want to set it?'
+                },
+                topic.instance.name,
+            );
             return;
         }
 
@@ -74,13 +69,17 @@ const setAlarm = new Topic<SetAlarmState, Partial<Alarm>, Alarm>('addAlarm')
             context.reply(`I really didn't understand that.`);
         }
     })
-    .onComplete(promptForName, (context, topic) => {
-        topic.instance.state.alarm.name = topic.args.name;
-        topic.instance.state.child = undefined;
-        topic.next();
-    })
-    .onComplete(promptForWhen, (context, topic) => {
-        topic.instance.state.alarm.when = topic.args.when;
+    .onComplete(stringPrompt, (context, topic) => {
+        switch (topic.args.name) {
+            case 'name':
+                topic.instance.state.alarm.name = topic.args.value;
+                break;
+            case 'when':
+                topic.instance.state.alarm.when = topic.args.value;
+                break;
+            default:
+                throw `unexpected stringPrompt name ${topic.args.name}`;
+        }
         topic.instance.state.child = undefined;
         topic.next();
     });
