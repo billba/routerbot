@@ -55,7 +55,7 @@ const setAlarm = new Topic<SetAlarmState, Partial<Alarm>, Alarm>('addAlarm')
             topic.complete(topic.instance.state.alarm as Alarm)
         }
     })
-    .onReceive(async (context, topic) => {
+    .onReceive((context, topic) => {
         if (context.request.type === 'message') {
             switch (topic.instance.state.prompt) {
                 case 'name': {
