@@ -15,6 +15,7 @@
     "botbuilder": "^4.0.0-m1.4",
     "botbuilder-node": "^4.0.0-m1.1",
     "botbuilder-services": "^4.0.0-m1.2",
+    "botbuilder-topical": "^0.1.5",
     "isomorphic-fetch": "^2.2.1",
     "prague-fluent": "0.17.13",
     "restify": "^6.3.1"
