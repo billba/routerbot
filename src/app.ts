@@ -83,7 +83,7 @@ const setAlarm = new Topic<SetAlarmState, Partial<Alarm>, Alarm>('addAlarm')
         topic.instance.state.alarm.when = topic.args.when;
         topic.instance.state.child = undefined;
         topic.next();
-    })
+    });
 
 const showAlarms = new Topic<undefined, { alarms: Alarm[] }>('showAlarms')
     .init((context, topic) => {
