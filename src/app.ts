@@ -25,53 +25,65 @@ interface Alarm {
 
 interface SetAlarmState {
     alarm: Partial<Alarm>;
-    prompt: string;
+    child: string;
 }
+
+const promptForName = new Topic<any, any, { name: string }>('promptForName')
+    .init((context, topic) => {
+        context.reply(`What would you like to name it?`);
+    })
+    .onReceive((context, topic) => {
+        topic.complete({
+            name: context.request.text
+        })
+    });
+
+const promptForWhen = new Topic<any, any, { when: string }>('promptForWhen')
+    .init((context, topic) => {
+        context.reply(`For when would you like to set it?`);
+    })
+    .onReceive((context, topic) => {
+        topic.complete({
+            when: context.request.text
+        })
+    });
 
 const setAlarm = new Topic<SetAlarmState, Partial<Alarm>, Alarm>('addAlarm')
     .init((context, topic) => {
         topic.instance.state.alarm = topic.args;
         topic.next();
     })
-    .next((context, topic) => {
-        if (!topic.instance.state.prompt) {
-            if (!topic.instance.state.alarm.name) {
-                context.reply(`What would you like to name it?`);
-                topic.instance.state.prompt = 'name';
-                return;
-            }
-            
-            if (!topic.instance.state.alarm.when) {
-                context.reply(`For when would you like to set it?`);
-                topic.instance.state.prompt = 'when';
-                return;
-            }
+    .next(async (context, topic) => {
+        if (!topic.instance.state.alarm.name) {
+            topic.instance.state.child = await promptForName.createInstance(context, topic.instance.name);
+            return;
+        }
+        
+        if (!topic.instance.state.alarm.when) {
+            topic.instance.state.child = await promptForWhen.createInstance(context, topic.instance.name);
+            return;
+        }
 
-            topic.complete(topic.instance.state.alarm as Alarm)
+        topic.complete(topic.instance.state.alarm as Alarm)
+    })
+    .onReceive(async (context, topic) => {
+        if (topic.instance.state.child)
+            return Topic.dispatch(context, topic.instance.state.child);
+        
+        if (context.request.type === 'message') {
+            context.reply(`I really didn't understand that.`);
         }
     })
-    .onReceive((context, topic) => {
-        if (context.request.type === 'message') {
-            switch (topic.instance.state.prompt) {
-                case 'name': {
-                    topic.instance.state.alarm.name = context.request.text;
-                    topic.instance.state.prompt = undefined;
-                    topic.next();
-                    return;
-                }
-                case 'when': {
-                    topic.instance.state.alarm.when = context.request.text;
-                    topic.instance.state.prompt = undefined;
-                    topic.next();
-                    return;
-                }
-                default: {
-                    context.reply(`I really didn't understand that.`);
-                    return;
-                }
-            }            
-        }
-    });
+    .onComplete(promptForName, (context, topic) => {
+        topic.instance.state.alarm.name = topic.args.name;
+        topic.instance.state.child = undefined;
+        topic.next();
+    })
+    .onComplete(promptForWhen, (context, topic) => {
+        topic.instance.state.alarm.when = topic.args.when;
+        topic.instance.state.child = undefined;
+        topic.next();
+    })
 
 const showAlarms = new Topic<undefined, { alarms: Alarm[] }>('showAlarms')
     .init((context, topic) => {

@@ -12,6 +12,7 @@ declare global {
         },
     }
 }
+
 class TopicInstance <State = any> {
     public name: string;
     public state = {} as State;
@@ -48,7 +49,7 @@ class TopicInitHelper <
         private context: BotContext,
         public instance: TopicInstance<State>,
         public args: InitArgs,
-        private data: TopicInitHelperData <CallbackArgs>
+        private data: TopicHelperData <CallbackArgs>
     ) {
     }
 
@@ -77,11 +78,6 @@ class TopicInitHelper <
     }
 }
 
-interface TopicInitHelperData <CallbackArgs> {
-    lifecycle?: TopicLifecycle.next | TopicLifecycle.complete | TopicLifecycle.dispatch;
-    args?: CallbackArgs;
-}
-
 type TopicNext <
     State,
     CallbackArgs,
@@ -98,7 +94,7 @@ class TopicNextHelper <
     constructor(
         private context: BotContext,
         public instance: TopicInstance<State>,
-        private data: TopicNextHelperData<CallbackArgs>,
+        private data: TopicHelperData<CallbackArgs>,
     ) {
     }
 
@@ -120,8 +116,8 @@ class TopicNextHelper <
     }
 }
 
-interface TopicNextHelperData <CallbackArgs> {
-    lifecycle?: TopicLifecycle.next | TopicLifecycle.complete;
+interface TopicHelperData <CallbackArgs> {
+    lifecycle?: TopicLifecycle;
     args?: CallbackArgs;
 }
 
@@ -141,7 +137,7 @@ class TopicOnReceiveHelper <
     constructor(
         private context: BotContext,
         public instance: TopicInstance<State>,
-        private data: TopicOnReceiveHelperData<CallbackArgs>,
+        private data: TopicHelperData<CallbackArgs>,
     ) {
     }
 
@@ -163,11 +159,6 @@ class TopicOnReceiveHelper <
     }
 }
 
-interface TopicOnReceiveHelperData <CallbackArgs> {
-    lifecycle?: TopicLifecycle.next | TopicLifecycle.complete;
-    args?: CallbackArgs
-}
-
 type TopicCallback <
     State,
     CallbackArgs,
@@ -185,24 +176,42 @@ class TopicCallbackHelper <
         public instance: TopicInstance<State>,
         public args: CallbackArgs,
         public child: string,
+        private data: TopicHelperData<CallbackArgs>,
     ) {
+    }
+
+    next () {
+        if (this.data.lifecycle)
+            throw "you may only call one of next() or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.next;
+    }
+
+    complete (
+        args?: CallbackArgs,
+    ) {
+        if (this.data.lifecycle)
+            throw "you may only call one of next() or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.complete;
+        this.data.args = args;
     }
 }
 
 const returnsPromiseVoid = () => Promise.resolve();
 
 export class Topic <
-    State = any,
+    State extends {} = {},
     InitArgs extends {} = {},
-    CallbackArgs = any,
+    CallbackArgs extends {} = {},
 > {
     private static topics: {
         [name: string]: Topic;
     } = {}
 
-    protected _init: TopicInit<State, InitArgs, CallbackArgs, Promise<void>>;
-    protected _next: TopicNext<State, CallbackArgs, Promise<void>>;
-    protected _onReceive: TopicOnReceive<State, CallbackArgs, Promise<void>>;
+    protected _init: TopicInit<State, InitArgs, CallbackArgs, Promise<void>> = returnsPromiseVoid;
+    protected _next: TopicNext<State, CallbackArgs, Promise<void>> = returnsPromiseVoid;
+    protected _onReceive: TopicOnReceive<State, CallbackArgs, Promise<void>> = returnsPromiseVoid;
 
     constructor (
         public name: string,
@@ -210,18 +219,7 @@ export class Topic <
         if (Topic.topics[name])
             throw new Error(`An attempt was made to create a topic with existing name ${name}. Ignored.`);
         
-        this._init = returnsPromiseVoid;
-        this._onReceive = returnsPromiseVoid;
         Topic.topics[name] = this;
-    }
-
-    protected saveInstance (
-        context: BotContext,
-        instance: TopicInstance<State>,
-    ) {
-        instance.name = Date.now().toString();
-        context.state.conversation.topical.instances[instance.name] = instance;
-        return instance.name;
     }
 
     createInstance (
@@ -249,37 +247,42 @@ export class Topic <
                 ? params[1]
                 : undefined;
      
-        const data = {} as TopicInitHelperData<CallbackArgs>;
+        const data = {} as TopicHelperData<CallbackArgs>;
         const instance = new TopicInstance<State>(this.name, callbackInstanceName);
 
         await toPromise(this._init(context, new TopicInitHelper(context, instance, args, data)));
+
         if (data.lifecycle === TopicLifecycle.complete) {
             await Topic.complete(context, instance, data.args);
+
             return undefined;
         } else {
-            const instanceName = this.saveInstance(context, instance);
+            instance.name = Date.now().toString() + Math.random().toString().substr(1);
+            context.state.conversation.topical.instances[instance.name] = instance;
+    
             if (data.lifecycle === TopicLifecycle.next) {
-                await Topic.next(context, instanceName);
+                await Topic.next(context, instance.name);
             } else if (data.lifecycle === TopicLifecycle.dispatch) {
-                await Topic.dispatch(context, instanceName);
+                await Topic.dispatch(context, instance.name);
             }
-            return instanceName;
+
+            return instance.name;
         }
     }
 
-    static async do(
+    static async do (
         context: BotContext,
         getRootInstanceName: () => Promise<string>
     ) {
-        if (!context.state.conversation.topical) {
-            context.state.conversation.topical = {
-                instances: {},
-                rootInstanceName: undefined
-            }
-            context.state.conversation.topical.rootInstanceName = await getRootInstanceName();
-        } else {
-            await Topic.dispatch(context, context.state.conversation.topical.rootInstanceName);
+        if (context.state.conversation.topical)
+            return Topic.dispatch(context, context.state.conversation.topical.rootInstanceName);
+        
+        context.state.conversation.topical = {
+            instances: {},
+            rootInstanceName: undefined
         }
+
+        context.state.conversation.topical.rootInstanceName = await getRootInstanceName();
     }
 
     static async next (
@@ -290,17 +293,17 @@ export class Topic <
 
         if (!instance) {
             console.warn(`Unknown instance ${instanceName}`);
-            return Promise.resolve();
+            return;
         }
 
         const topic = Topic.topics[instance.topicName];
         
         if (!topic) {
             console.warn(`Unknown topic ${instance.topicName}`);
-            return Promise.resolve();
+            return;
         }
 
-        const data = {} as TopicNextHelperData<any>;
+        const data = {} as TopicHelperData<any>;
 
         await topic._next(context, new TopicNextHelper(context, instance, data));
 
@@ -319,17 +322,17 @@ export class Topic <
 
         if (!instance) {
             console.warn(`Unknown instance ${instanceName}`);
-            return Promise.resolve();
+            return;
         }
 
         const topic = Topic.topics[instance.topicName];
         
         if (!topic) {
             console.warn(`Unknown topic ${instance.topicName}`);
-            return Promise.resolve();
+            return;
         }
 
-        const data = {} as TopicOnReceiveHelperData<any>;
+        const data = {} as TopicHelperData<any>;
 
         await topic._onReceive(context, new TopicOnReceiveHelper(context, instance, data));
 
@@ -345,26 +348,35 @@ export class Topic <
         instance: TopicInstance<any>,
         args: CallbackArgs,
     ) {
-        if (!instance.callbackInstanceName)
+        if (!instance.callbackInstanceName) {
             return;
+        }
                 
         const parentInstance = context.state.conversation.topical.instances[instance.callbackInstanceName];
 
         if (!parentInstance) {
             console.warn(`Unknown parent instance ${instance.callbackInstanceName}`);
-            return Promise.resolve();
+            return;
         }
 
         const topic = Topic.topics[parentInstance.topicName];
-        
+
         if (!topic) {
             console.warn(`Unknown topic ${parentInstance.topicName}`);
-            return Promise.resolve();
+            return;
         }
 
-        const topicCallbackHelper = new TopicCallbackHelper(parentInstance, args, instance.name);
+        const data = {} as TopicHelperData<any>;
+    
+        const topicCallbackHelper = new TopicCallbackHelper(parentInstance, args, instance.name, data);
 
         await topic._callbacks[instance.topicName](context, topicCallbackHelper);
+
+        if (data.lifecycle === TopicLifecycle.next) {
+            await Topic.next(context, parentInstance.name);
+        } else if (data.lifecycle === TopicLifecycle.complete) {
+            await Topic.complete(context, parentInstance, data.args);
+        }
     }
 
     init (
