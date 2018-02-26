@@ -14,18 +14,13 @@ const bot = new Bot(adapter);
 bot
     .use(new MemoryStorage())
     .use(new BotStateManager())
-    .use({
-        async postActivity(context, activities, next) {
-            return await next();
-        }
-    })
-    .onReceive(context => {
-        Topic.do(context, () => alarmBot.createInstance(context));
+    .onReceive(async context => {
+        await Topic.do(context, () => alarmBot.createInstance(context));
     });
 
 interface Alarm {
     name: string;
-    when: Date;
+    when: string;
 }
 
 interface AlarmBot {
@@ -33,21 +28,53 @@ interface AlarmBot {
     alarms: Alarm[];
 }
 
-const setAlarm = new Topic<Partial<Alarm>, Partial<Alarm>, Alarm>('addAlarm')
+interface SetAlarmState {
+    alarm: Partial<Alarm>;
+    prompt: string;
+}
+
+const setAlarm = new Topic<SetAlarmState, Partial<Alarm>, Alarm>('addAlarm')
     .init((context, topic) => {
-        topic.instance.state = topic.args;
-        context.reply(`Let's fake setting an alarm. Type "done".`);
+        topic.instance.state.alarm = topic.args;
+        topic.next();
+    })
+    .next((context, topic) => {
+        if (!topic.instance.state.prompt) {
+            if (!topic.instance.state.alarm.name) {
+                context.reply(`What would you like to name it?`);
+                topic.instance.state.prompt = 'name';
+                return;
+            }
+            
+            if (!topic.instance.state.alarm.when) {
+                context.reply(`For when would you like to set it?`);
+                topic.instance.state.prompt = 'when';
+                return;
+            }
+
+            topic.complete(topic.instance.state.alarm as Alarm)
+        }
     })
     .onReceive(async (context, topic) => {
         if (context.request.type === 'message') {
-            if (context.request.text === 'done') {
-                topic.complete({
-                    name: "dog",
-                    when: new Date(),
-                });
-            }  else {
-                context.reply(`I really didn't understand that.`);
-            }
+            switch (topic.instance.state.prompt) {
+                case 'name': {
+                    topic.instance.state.alarm.name = context.request.text;
+                    topic.instance.state.prompt = undefined;
+                    topic.next();
+                    return;
+                }
+                case 'when': {
+                    topic.instance.state.alarm.when = context.request.text;
+                    topic.instance.state.prompt = undefined;
+                    topic.next();
+                    return;
+                }
+                default: {
+                    context.reply(`I really didn't understand that.`);
+                    return;
+                }
+            }            
         }
     });
 
@@ -61,12 +88,11 @@ const showAlarms = new Topic<undefined, { alarms: Alarm[] }>('showAlarms')
 const alarmBot = new Topic<AlarmBot>('alarmBot')
     .init((context, topic) => {
         context.reply(`Welcome to Alarm Bot! I know how to set, show, and delete alarms.`);
-        topic.instance.state.child = undefined;
         topic.instance.state.alarms = [];
     })
     .onReceive(async (context, topic) => {
         if (topic.instance.state.child)
-            return Topic.dispatchToInstance(context, topic.instance.state.child);
+            return Topic.dispatch(context, topic.instance.state.child);
         else if (context.request.type === 'message') {
             if (context.request.text === "set alarm") {
                 topic.instance.state.child = await setAlarm.createInstance(context, topic.instance.name);

@@ -33,6 +33,12 @@ type TopicInit <
     topic: TopicInitHelper<State, InitArgs, CallbackArgs>,
 ) => T;
 
+enum TopicLifecycle {
+    next,
+    complete,
+    dispatch,
+}
+
 class TopicInitHelper <
     State,
     InitArgs,
@@ -46,33 +52,77 @@ class TopicInitHelper <
     ) {
     }
 
+    next () {
+        if (this.data.lifecycle)
+            throw "you may only call one of next(), dispatch(), or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.next;
+    }
+
     complete (
         args?: CallbackArgs,
     ) {
-        if (this.data.dispatch)
-            throw "you may call complete() or dispatch() but not both";
-
-        this.data.complete = true;
+        if (this.data.lifecycle)
+            throw "you may only call one of next(), dispatch(), or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.complete;
         this.data.args = args;
     }
 
     dispatch () {
-        if (this.data.complete)
-            throw "you may call complete() or dispatch() but not both";
-
-        this.data.dispatch = true;
+        if (this.data.lifecycle)
+            throw "you may only call one of next(), dispatch(), or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.dispatch;
     }
 }
 
 interface TopicInitHelperData <CallbackArgs> {
-    complete: boolean;
-    args: CallbackArgs;
-    dispatch: boolean;
+    lifecycle?: TopicLifecycle.next | TopicLifecycle.complete | TopicLifecycle.dispatch;
+    args?: CallbackArgs;
 }
 
-interface TopicOnReceiveHelperData <CallbackArgs> {
-    complete: boolean;
-    args: CallbackArgs
+type TopicNext <
+    State,
+    CallbackArgs,
+    T
+> = (
+    context: BotContext,
+    topic: TopicNextHelper<State, CallbackArgs>
+) => T
+
+class TopicNextHelper <
+    State,
+    CallbackArgs,
+> {
+    constructor(
+        private context: BotContext,
+        public instance: TopicInstance<State>,
+        private data: TopicNextHelperData<CallbackArgs>,
+    ) {
+    }
+
+    next () {
+        if (this.data.lifecycle)
+            throw "you may only call one of next() or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.next;
+    }
+
+    complete (
+        args?: CallbackArgs,
+    ) {
+        if (this.data.lifecycle)
+            throw "you may only call one of next() or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.complete;
+        this.data.args = args;
+    }
+}
+
+interface TopicNextHelperData <CallbackArgs> {
+    lifecycle?: TopicLifecycle.next | TopicLifecycle.complete;
+    args?: CallbackArgs;
 }
 
 type TopicOnReceive <
@@ -95,12 +145,27 @@ class TopicOnReceiveHelper <
     ) {
     }
 
+    next () {
+        if (this.data.lifecycle)
+            throw "you may only call one of next() or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.next;
+    }
+
     complete (
-        args: CallbackArgs,
+        args?: CallbackArgs,
     ) {
-        this.data.complete = true;
+        if (this.data.lifecycle)
+            throw "you may only call one of next() or complete()";
+        
+        this.data.lifecycle = TopicLifecycle.complete;
         this.data.args = args;
     }
+}
+
+interface TopicOnReceiveHelperData <CallbackArgs> {
+    lifecycle?: TopicLifecycle.next | TopicLifecycle.complete;
+    args?: CallbackArgs
 }
 
 type TopicCallback <
@@ -136,6 +201,7 @@ export class Topic <
     } = {}
 
     protected _init: TopicInit<State, InitArgs, CallbackArgs, Promise<void>>;
+    protected _next: TopicNext<State, CallbackArgs, Promise<void>>;
     protected _onReceive: TopicOnReceive<State, CallbackArgs, Promise<void>>;
 
     constructor (
@@ -187,13 +253,15 @@ export class Topic <
         const instance = new TopicInstance<State>(this.name, callbackInstanceName);
 
         await toPromise(this._init(context, new TopicInitHelper(context, instance, args, data)));
-        if (data.complete) {
-            await Topic.completeInstance(context, instance, data.args);
+        if (data.lifecycle === TopicLifecycle.complete) {
+            await Topic.complete(context, instance, data.args);
             return undefined;
         } else {
             const instanceName = this.saveInstance(context, instance);
-            if (data.dispatch) {
-                await Topic.dispatchToInstance(context, instanceName);
+            if (data.lifecycle === TopicLifecycle.next) {
+                await Topic.next(context, instanceName);
+            } else if (data.lifecycle === TopicLifecycle.dispatch) {
+                await Topic.dispatch(context, instanceName);
             }
             return instanceName;
         }
@@ -208,14 +276,42 @@ export class Topic <
                 instances: {},
                 rootInstanceName: undefined
             }
-
             context.state.conversation.topical.rootInstanceName = await getRootInstanceName();
         } else {
-            await Topic.dispatchToInstance(context, context.state.conversation.topical.rootInstanceName);
+            await Topic.dispatch(context, context.state.conversation.topical.rootInstanceName);
         }
     }
 
-    static async dispatchToInstance (
+    static async next (
+        context: BotContext,
+        instanceName: string,
+    ) {
+        const instance = context.state.conversation.topical.instances[instanceName];
+
+        if (!instance) {
+            console.warn(`Unknown instance ${instanceName}`);
+            return Promise.resolve();
+        }
+
+        const topic = Topic.topics[instance.topicName];
+        
+        if (!topic) {
+            console.warn(`Unknown topic ${instance.topicName}`);
+            return Promise.resolve();
+        }
+
+        const data = {} as TopicNextHelperData<any>;
+
+        await topic._next(context, new TopicNextHelper(context, instance, data));
+
+        if (data.lifecycle === TopicLifecycle.next) {
+            await Topic.next(context, instanceName);
+        } else if (data.lifecycle === TopicLifecycle.complete) {
+            await Topic.complete(context, instance, data.args);
+        }
+    }
+
+    static async dispatch (
         context: BotContext,
         instanceName: string,
     ): Promise<void> {
@@ -237,12 +333,14 @@ export class Topic <
 
         await topic._onReceive(context, new TopicOnReceiveHelper(context, instance, data));
 
-        if (data.complete) {
-            await Topic.completeInstance(context, instance, data.args);
+        if (data.lifecycle === TopicLifecycle.next) {
+            await Topic.next(context, instanceName);
+        } else if (data.lifecycle === TopicLifecycle.complete) {
+            await Topic.complete(context, instance, data.args);
         }
     }
 
-    static async completeInstance <CallbackArgs = any> (
+    static async complete <CallbackArgs = any> (
         context: BotContext,
         instance: TopicInstance<any>,
         args: CallbackArgs,
@@ -270,16 +368,24 @@ export class Topic <
     }
 
     init (
-        init: TopicInit<State, InitArgs, CallbackArgs, Promiseable<void>>
+        init: TopicInit<State, InitArgs, CallbackArgs, Promiseable<void>>,
     ): this {
         this._init = (context, topic) => toPromise(init(context, topic));
     
         return this;
     }
 
+    next (
+        next: TopicNext<State, CallbackArgs, Promiseable<void>>,
+    ): this {
+        this._next = (context, topic) => toPromise(next(context, topic));
+
+        return this;
+    }
+
     onReceive (
-        onReceive: TopicOnReceive<State, CallbackArgs, Promiseable<void>>
-    ) {
+        onReceive: TopicOnReceive<State, CallbackArgs, Promiseable<void>>,
+    ): this {
         this._onReceive = (context, instance) => toPromise(onReceive(context, instance));
 
         return this;
@@ -292,7 +398,7 @@ export class Topic <
     onComplete <C> (
         topic: Topic<any, any, C>,
         callback: TopicCallback<State, C, Promiseable<void>>,
-    ) {
+    ): this {
         if (this._callbacks[topic.name])
             throw new Error(`An attempt was made to create a callback with existing topic named ${topic.name}. Ignored.`);
 
