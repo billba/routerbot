@@ -215,9 +215,18 @@ export class Topic <
 
     constructor (
         public name: string,
+        behavior?: 'singleton' | 'overwrite',
     ) {
-        if (Topic.topics[name])
-            throw new Error(`An attempt was made to create a topic with existing name ${name}. Ignored.`);
+        if (Topic.topics[name]) {
+            switch (behavior) {
+                case 'singleton':
+                    return;
+                case 'overwrite':
+                    break;
+                default:
+                    throw new Error(`An attempt was made to create a topic with existing name "${name}". Ignored.`);
+            }
+        }
         
         Topic.topics[name] = this;
     }

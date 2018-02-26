@@ -14,7 +14,7 @@ interface PromptCallbackArgs {
     value: string;
 }
 
-export const stringPrompt = new Topic<PromptState, PromptInitArgs, PromptCallbackArgs>('stringPrompt')
+export const stringPrompt = new Topic<PromptState, PromptInitArgs, PromptCallbackArgs>('stringPrompt', 'singleton')
     .init((context, topic) => {
         topic.instance.state.name = topic.args.name;
         context.reply(topic.args.prompt);
