@@ -169,10 +169,7 @@ const alarmBot = new TopicClass<undefined, AlarmBotState, undefined>('alarmBot')
         }
     })
     .onChildReturn(simpleForm, (c, t) => {
-        t.instance.state.alarms.push({
-            name: t.args.form['name'],
-            when: t.args.form['when'],
-        });
+        t.instance.state.alarms.push({ ... t.args.form } as any as Alarm);
 
         c.reply(`Alarm successfully added!`);
         
