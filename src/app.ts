@@ -45,8 +45,12 @@ interface ShowAlarmInitArgs {
 
 const showAlarms = new Topic<any, ShowAlarmInitArgs>('showAlarms')
     .init((context, topic) => {
-        context.reply(`You have the following alarms set:`);
-        topic.args.alarms.forEach(alarm => context.reply(`"${alarm.name}" for ${alarm.when}`));
+        if (topic.args.alarms.length === 0) {
+            context.reply(`You haven't set any alarms.`);
+        } else {
+            context.reply(`You have the following alarms set:`);
+            topic.args.alarms.forEach(alarm => context.reply(`"${alarm.name}" for ${alarm.when}`));
+        }
         topic.complete();
     });
 
@@ -81,20 +85,20 @@ const deleteAlarm = new Topic<DeleteAlarmInitArgs, DeleteAlarmState, DeleteAlarm
             .map(alarm => alarm.name)
             .join(', ');
 
-        topic.instance.state.child = await stringPrompt.createInstance(context, topic.instance.name, {
+        topic.instance.state.child = await topic.createTopicInstance(stringPrompt, {
             name: 'whichAlarm',
             prompt: `Which alarm do you want to delete? (${names})`,
         });
     })
     .onReceive(async (context, topic) => {
         if (topic.instance.state.child)
-            await Topic.dispatch(context, topic.instance.state.child);
+            await topic.dispatchToInstance(topic.instance.state.child);
     })
     .onComplete(stringPrompt, async (context, topic) => {
         switch (topic.args.name) {
             case 'whichAlarm':
                 topic.instance.state.alarmName = topic.args.value;
-                topic.instance.state.child = await stringPrompt.createInstance(context, topic.instance.name, {
+                topic.instance.state.child = await topic.createTopicInstance(stringPrompt, {
                     name: 'confirm',
                     prompt: `Are you sure you want to delete alarm "${topic.args.value}"? (yes/no)"`,
                 });
@@ -124,11 +128,11 @@ const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
     })
     .onReceive(async (context, topic) => {
         if (topic.instance.state.child)
-            return Topic.dispatch(context, topic.instance.state.child);
+            return topic.dispatchToInstance(topic.instance.state.child);
 
         if (context.request.type === 'message') {
             if (/set/i.test(context.request.text)) {
-                topic.instance.state.child = await simpleForm.createInstance(context, topic.instance.name, {
+                topic.instance.state.child = await topic.createTopicInstance(simpleForm, {
                     schema: {
                         name: {
                             type: 'string',
@@ -141,11 +145,11 @@ const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
                     }
                 });
             } else if (/show/i.test(context.request.text)) {
-                topic.instance.state.child = await showAlarms.createInstance(context, {
+                topic.instance.state.child = await topic.createTopicInstance(showAlarms, {
                     alarms: topic.instance.state.alarms
                 });
             } else if (/delete/i.test(context.request.text)) {
-                topic.instance.state.child = await deleteAlarm.createInstance(context, topic.instance.name, {
+                topic.instance.state.child = await topic.createTopicInstance(deleteAlarm, {
                     alarms: topic.instance.state.alarms
                 });
             }
@@ -161,6 +165,7 @@ const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
         
         topic.instance.state.child = undefined;
     })
+    .onComplete(showAlarms)
     .onComplete(deleteAlarm, (context, topic) => {
         if (topic.args) {
             topic.instance.state.alarms = topic.instance.state.alarms
@@ -172,4 +177,4 @@ const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
         }
 
         topic.instance.state.child = undefined;
-    })
+    });
