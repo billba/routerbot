@@ -1,5 +1,5 @@
 import { ConsoleAdapter } from 'botbuilder-node';
-import { Bot, MemoryStorage, BotStateManager, Middleware } from 'botbuilder';
+import { Bot, MemoryStorage, BotStateManager } from 'botbuilder';
 import 'isomorphic-fetch';
 // import { BotFrameworkAdapter } from 'botbuilder-services';
 // import { createServer } from 'restify';
@@ -20,7 +20,11 @@ bot
         postActivity(context, activities, next) {
             for (let activity of activities) {
                 if (activity.type === 'message')
-                    activity.text = "> " + activity.text;
+                    activity.text = '\n> '
+                        + activity.text
+                            .split('\n')
+                            .join(`\n> `)
+                        + '\n';
             }
             return next();
         }
@@ -33,6 +37,10 @@ interface Alarm {
     name: string;
     when: string;
 }
+
+const listAlarms = (alarms: Alarm[]) => alarms
+    .map(alarm => `* "${alarm.name}" set for ${alarm.when}`)
+    .join('\n');
 
 interface SetAlarmState {
     alarm: Partial<Alarm>;
@@ -48,8 +56,7 @@ const showAlarms = new Topic<any, ShowAlarmInitArgs>('showAlarms')
         if (topic.args.alarms.length === 0) {
             context.reply(`You haven't set any alarms.`);
         } else {
-            context.reply(`You have the following alarms set:`);
-            topic.args.alarms.forEach(alarm => context.reply(`"${alarm.name}" for ${alarm.when}`));
+            context.reply(`You have the following alarms set:\n${listAlarms(topic.args.alarms)}`);
         }
         topic.complete();
     });
@@ -81,13 +88,9 @@ const deleteAlarm = new Topic<DeleteAlarmInitArgs, DeleteAlarmState, DeleteAlarm
 
         topic.instance.state.alarms = topic.args.alarms;
 
-        const names = topic.args.alarms
-            .map(alarm => alarm.name)
-            .join(', ');
-
         topic.instance.state.child = await topic.createTopicInstance(stringPrompt, {
             name: 'whichAlarm',
-            prompt: `Which alarm do you want to delete? (${names})`,
+            prompt: `Which alarm do you want to delete?\n${listAlarms(topic.instance.state.alarms)}`,
         });
     })
     .onReceive(async (context, topic) => {
@@ -121,9 +124,11 @@ interface AlarmBotState {
 
 const simpleForm = new SimpleForm('simpleForm');
 
+const helpText = `I know how to set, show, and delete alarms.`;
+
 const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
     .init((context, topic) => {
-        context.reply(`Welcome to Alarm Bot! I know how to set, show, and delete alarms.`);
+        context.reply(`Welcome to Alarm Bot!\n${helpText}`);
         topic.instance.state.alarms = [];
     })
     .onReceive(async (context, topic) => {
@@ -131,7 +136,7 @@ const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
             return topic.dispatchToInstance(topic.instance.state.child);
 
         if (context.request.type === 'message') {
-            if (/set/i.test(context.request.text)) {
+            if (/set|add|create/i.test(context.request.text)) {
                 topic.instance.state.child = await topic.createTopicInstance(simpleForm, {
                     schema: {
                         name: {
@@ -144,14 +149,16 @@ const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
                         }
                     }
                 });
-            } else if (/show/i.test(context.request.text)) {
+            } else if (/show|list/i.test(context.request.text)) {
                 topic.instance.state.child = await topic.createTopicInstance(showAlarms, {
                     alarms: topic.instance.state.alarms
                 });
-            } else if (/delete/i.test(context.request.text)) {
+            } else if (/delete|remove/i.test(context.request.text)) {
                 topic.instance.state.child = await topic.createTopicInstance(deleteAlarm, {
                     alarms: topic.instance.state.alarms
                 });
+            } else {
+                context.reply(helpText);
             }
         }
     })
