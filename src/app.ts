@@ -4,8 +4,8 @@ import 'isomorphic-fetch';
 // import { BotFrameworkAdapter } from 'botbuilder-services';
 // import { createServer } from 'restify';
 import { Topic } from 'botbuilder-topical';
-import { simpleForm, SimpleFormSchema } from 'botbuilder-topical';
-import { stringPrompt } from 'botbuilder-topical';
+import { SimpleForm } from 'botbuilder-topical';
+import { StringPrompt } from 'botbuilder-topical';
 
 const adapter = new ConsoleAdapter();
 
@@ -17,12 +17,12 @@ bot
     .use(new MemoryStorage())
     .use(new BotStateManager())
     .use({
-        async receiveActivity(context, next) {
-            context.reply("<<<");
-            // if (context.state.conversation.topical)
-            //     console.log(context.state.conversation.topical.instances);
-            await next();
-            context.reply(">>>")
+        postActivity(context, activities, next) {
+            for (let activity of activities) {
+                if (activity.type === 'message')
+                    activity.text = "> " + activity.text;
+            }
+            return next();
         }
     })
     .onReceive(async context => {
@@ -37,17 +37,6 @@ interface Alarm {
 interface SetAlarmState {
     alarm: Partial<Alarm>;
     child: string;
-}
-
-let alarmSchema: SimpleFormSchema = {
-    name: {
-        type: 'string',
-        prompt: 'What do you want to call it?'
-    },
-    when: {
-        type: 'string',
-        prompt: 'For when do you want to set it?'
-    }
 }
 
 interface ShowAlarmInitArgs {
@@ -76,7 +65,9 @@ interface DeleteAlarmCallbackArgs {
     alarmName: string;
 }
 
-const deleteAlarm = new Topic<DeleteAlarmState, DeleteAlarmInitArgs, DeleteAlarmCallbackArgs>('deleteAlarm')
+const stringPrompt = new StringPrompt('stringPrompt');
+
+const deleteAlarm = new Topic<DeleteAlarmInitArgs, DeleteAlarmState, DeleteAlarmCallbackArgs>('deleteAlarm')
     .init(async (context, topic) => {
         if (topic.args.alarms.length === 0) {
             context.reply(`You don't have any alarms.`);
@@ -124,7 +115,9 @@ interface AlarmBotState {
     alarms: Alarm[];
 }
 
-const alarmBot = new Topic<AlarmBotState>('alarmBot')
+const simpleForm = new SimpleForm('simpleForm');
+
+const alarmBot = new Topic<undefined, AlarmBotState, undefined>('alarmBot')
     .init((context, topic) => {
         context.reply(`Welcome to Alarm Bot! I know how to set, show, and delete alarms.`);
         topic.instance.state.alarms = [];
@@ -136,7 +129,16 @@ const alarmBot = new Topic<AlarmBotState>('alarmBot')
         if (context.request.type === 'message') {
             if (/set/i.test(context.request.text)) {
                 topic.instance.state.child = await simpleForm.createInstance(context, topic.instance.name, {
-                    schema: alarmSchema,
+                    schema: {
+                        name: {
+                            type: 'string',
+                            prompt: 'What do you want to call it?'
+                        },
+                        when: {
+                            type: 'string',
+                            prompt: 'For when do you want to set it?'
+                        }
+                    }
                 });
             } else if (/show/i.test(context.request.text)) {
                 topic.instance.state.child = await showAlarms.createInstance(context, {
