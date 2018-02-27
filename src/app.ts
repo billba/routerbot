@@ -19,12 +19,13 @@ bot
     .use({
         postActivity(context, activities, next) {
             for (let activity of activities) {
-                if (activity.type === 'message')
+                if (activity.type === 'message') {
                     activity.text = '\n> '
                         + activity.text
                             .split('\n')
                             .join(`\n> `)
                         + '\n';
+                }
             }
             return next();
         }
